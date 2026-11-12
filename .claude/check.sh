@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Vérification rapide du projet (appelée par le hook Stop global).
-# Lance les tests de l'enregistreur si son venv existe, sinon no-op.
+# 1) tests de la logique RER B (rerb/, bibliothèque standard seulement)
+# 2) tests de l'enregistreur si son venv existe
 set -euo pipefail
-cd "$(dirname "$0")/../recorder" 2>/dev/null || exit 0
-[ -x .venv/bin/python ] || exit 0
-.venv/bin/python -m unittest test_recorder
+RACINE="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [ -d "$RACINE/rerb" ]; then
+  (cd "$RACINE/rerb" && python3 -m unittest discover -p "test_*.py")
+fi
+
+if [ -x "$RACINE/recorder/.venv/bin/python" ]; then
+  (cd "$RACINE/recorder" && .venv/bin/python -m unittest test_recorder)
+fi
