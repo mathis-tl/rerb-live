@@ -3,14 +3,18 @@
 Cadrage : docs/cadrage-tache-3.md (E5 : Boston d'abord, jointure par identifiant de course).
 
 • grouper_par_course : corps JSON:API d'un relevé -> {trip_id: [prédictions]}.
+• lire_gps_mbta      : relevé mbta_vehicles -> points GPS (instant = updated_at, J1).
+• apparier          : point GPS + relevés de prévisions -> (Train, None) ou (None, motif d'écart) (J2, J3, E2a).
 • lire_train_mbta    : prédictions d'une course -> Train (gares triées par stop_sequence, doublons de ligne
                        supprimés, heures en UTC).
 
 Seul `CANCELLED` marque un passage annulé (`SKIPPED` = arrêt sauté, pas train supprimé).
 `recorded_at` = heure de réception du relevé par le collecteur (`ts_recv_utc`).
 """
+from bisect import bisect_right
 from collections import defaultdict
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from position import Passage, Train
 
@@ -26,6 +30,45 @@ def grouper_par_course(corps):
         if trip:
             groupes[trip["id"]].append(p)
     return dict(groupes)
+
+
+SEUIL_GPS_PERIME = timedelta(seconds=120)  # J2 : âge = reçu - updated_at ; 0,5 % des positions au-delà de 300 s
+
+
+@dataclass(frozen=True)
+class PointGps:
+    course: "str | None"
+    latitude: "float | None"
+    longitude: "float | None"
+    instant: datetime   # updated_at : instant réel de la position (J1), pas l'heure de réception
+    statut: str         # IN_TRANSIT_TO ou STOPPED_AT
+    recu: datetime      # ts_recv_utc du relevé
+
+
+def lire_gps_mbta(corps, recu):
+    points = []
+    for v in corps.get("data", []):
+        a = v["attributes"]
+        trip = v["relationships"]["trip"]["data"]
+        points.append(PointGps(trip["id"] if trip else None, a["latitude"], a["longitude"],
+                               _heure(a["updated_at"]), a["current_status"], recu))
+    return points
+
+
+def apparier(point, releves, seuil=SEUIL_GPS_PERIME):
+    """releves : [(recu, grouper_par_course(corps))] trié par `recu` croissant.
+
+    E2a : dernier relevé de prévisions reçu au plus tard à l'instant du GPS, jamais le futur.
+    """
+    if point.recu - point.instant > seuil:
+        return None, "GPS périmé"
+    i = bisect_right([r[0] for r in releves], point.instant)
+    if i == 0:
+        return None, "aucun relevé de prévisions avant le GPS"
+    recu, groupes = releves[i - 1]
+    if point.course not in groupes:
+        return None, "course absente des prévisions"
+    return lire_train_mbta(groupes[point.course], recu), None
 
 
 def lire_train_mbta(predictions, recorded_at):
