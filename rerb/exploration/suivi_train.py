@@ -63,7 +63,16 @@ def hms_utc(texte):
     return datetime.fromisoformat(texte.replace("Z", "+00:00")).strftime("%H:%M:%S")
 
 
-def choisir(trains, nom, h_min, h_max):
+def _ref(ej):
+    r = ej.get("DatedVehicleJourneyRef")
+    return r.get("value") if isinstance(r, dict) else r
+
+
+def choisir(trains, nom, h_min, h_max, ref=None):
+    """Repère le train. Une fois trouvé, on le suit par DatedVehicleJourneyRef (`ref`) : la fenêtre
+    d'heures porte sur la 1re gare de la liste, qui change quand PRIM retire les gares passées."""
+    if ref is not None:
+        return next((ej for ej in trains if _ref(ej) == ref), None)
     for ej in trains:
         noms = [n.get("value") for n in (ej.get("VehicleJourneyName") or [])]
         if nom not in noms:
@@ -86,6 +95,7 @@ def main():
     distance = distance_depuis_reseau(reseau)
     nom_gare = lambda ref: stops[stop_area_number(ref)].name  # noqa: E731
     print(f"suivi de {nom} (1re gare entre {h_min} et {h_max} UTC), fin à {fin} UTC, pas {pas} s", flush=True)
+    ref = None
     while True:
         maintenant = datetime.now(timezone.utc)
         if maintenant.strftime("%H:%M") >= fin:
@@ -96,7 +106,9 @@ def main():
             print(maintenant.strftime("%H:%M:%S"), "aucun relevé lisible", flush=True)
         else:
             ts, trains = rel
-            ej = choisir(trains, nom, h_min, h_max)
+            ej = choisir(trains, nom, h_min, h_max, ref)
+            if ej is not None:
+                ref = _ref(ej)
             tete = f"{maintenant.strftime('%H:%M:%S')} relevé {ts[11:19]}"
             if ej is None:
                 print(tete, f"| {nom} absent du relevé", flush=True)
