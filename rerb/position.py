@@ -41,6 +41,8 @@ class Passage:
     arrivee: "datetime | None"
     depart: "datetime | None"
     annule: bool = False
+    reconstruit: bool = False  # heures prises dans la mémoire (gare retirée par PRIM), voir memoire.py
+    repare: bool = False       # heure ramenée en arrière pour rester cohérente avec la gare suivante
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,8 @@ class Estimation:
     fraction: "float | None" = None
     distance_m: "float | None" = None  # depuis `gare`
     perime: bool = False
+    reconstruit: bool = False          # une des gares utilisées vient de la mémoire
+    repare: bool = False               # une des gares utilisées a une heure réparée
 
 
 def _heure(texte):
@@ -113,10 +117,10 @@ def estimer(train, t, distance, seuil_perime=SEUIL_PERIME):
             depart = arrivee
         if arrivee is None or depart is None:
             return _non_place("heures manquantes", perime)
-        horaires.append((p.gare, arrivee, depart))
+        horaires.append((p.gare, arrivee, depart, p.reconstruit, p.repare))
 
     # cohérence : on repart après être arrivé, et on arrive après être reparti de la gare d'avant
-    for i, (_, arrivee, depart) in enumerate(horaires):
+    for i, (_, arrivee, depart, _r, _p) in enumerate(horaires):
         if depart < arrivee:
             return _non_place("heures incohérentes", perime)
         if i > 0 and arrivee < horaires[i - 1][2]:
@@ -127,18 +131,22 @@ def estimer(train, t, distance, seuil_perime=SEUIL_PERIME):
     if t > horaires[-1][2]:
         return Estimation(Etat.TERMINE, perime=perime)
 
-    for i, (gare, arrivee, depart) in enumerate(horaires):
+    for i, (gare, arrivee, depart, recon, repare) in enumerate(horaires):
         if arrivee <= t <= depart:
-            return Estimation(Etat.A_QUAI, gare=gare, distance_m=0.0, perime=perime)
+            return Estimation(Etat.A_QUAI, gare=gare, distance_m=0.0, perime=perime,
+                              reconstruit=recon, repare=repare)
         if i + 1 < len(horaires) and depart < t < horaires[i + 1][1]:
             suivante, arrivee_suiv = horaires[i + 1][0], horaires[i + 1][1]
+            recon = recon or horaires[i + 1][3]
+            repare = repare or horaires[i + 1][4]
             try:
                 longueur = distance(gare, suivante)
             except DistanceInconnue as erreur:
                 return _non_place(f"distance inconnue ({erreur})", perime)
             f = (t - depart) / (arrivee_suiv - depart)
             return Estimation(Etat.EN_ROUTE, gare=gare, gare_suivante=suivante,
-                              fraction=f, distance_m=f * longueur, perime=perime)
+                              fraction=f, distance_m=f * longueur, perime=perime,
+                              reconstruit=recon, repare=repare)
     raise AssertionError("inatteignable : t est entre la 1re arrivée et le dernier départ")
 
 

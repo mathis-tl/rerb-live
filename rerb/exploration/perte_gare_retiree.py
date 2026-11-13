@@ -22,6 +22,7 @@ from pathlib import Path
 RACINE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(RACINE / "rerb"))
 
+from memoire import Memoire  # noqa: E402
 from position import Etat, Train, estimer, lire_train  # noqa: E402
 
 PAS = timedelta(seconds=5)
@@ -67,8 +68,11 @@ def main():
     detail = sys.argv[2] if len(sys.argv) > 2 else None
     tous = []                       # horodatages de tous les relevés
     obs = defaultdict(dict)         # train -> {ts: (Train brut, Train avec mémoire)}
-    memoire = {}                    # train -> {gare: Passage}
+    memoire = {}                    # train -> {gare: Passage} : mémoire NAÏVE, sert seulement à la référence
+    m2 = Memoire()                  # vraie mémoire M2 (rerb/memoire.py), variante « avec mémoire »
     noms = {}
+    refus = Counter()               # observations refusées (non placé) par variante, tous trains confondus
+    n_obs = 0
     for ts, trains in releves(dossier):
         tous.append(ts)
         for ej in trains:
@@ -80,7 +84,12 @@ def main():
             m = memoire.setdefault(k, {})
             for p in t.passages:
                 m[p.gare] = p
-            obs[k][ts] = (t, Train(list(m.values()), t.recorded_at))
+            avec = m2.consolider(k, t)
+            obs[k][ts] = (t, avec)
+            n_obs += 1
+            for variante, tr in (("sans", t), ("avec", avec)):
+                if estimer(tr, ts, FACTICE, JAMAIS_PERIME).etat == Etat.NON_PLACE:
+                    refus[variante] += 1
     print(f"{len(tous)} relevés du {tous[0]} au {tous[-1]} ; {len(obs)} trains distincts")
 
     ecartes = Counter()
@@ -126,6 +135,11 @@ def main():
                             Etat.TERMINE: "terminé à tort",
                         }.get(e.etat, "autre état (à quai / en route)")
                     secondes[(r.etat.name, variante)][issue] += pas_s
+                    if variante == "avec" and dernier is not None and dernier in o:
+                        if e.reconstruit:
+                            secondes[(r.etat.name, "marques")]["reconstruit"] += pas_s
+                        if e.repare:
+                            secondes[(r.etat.name, "marques")]["réparé"] += pas_s
                     if tranche:
                         par_duree[tranche][variante][issue] += pas_s
                     if issue == "position inconnue":
@@ -150,6 +164,15 @@ def main():
             if tot:
                 ligne.append(f"{variante} mémoire {100 * c['position inconnue'] / tot:.1f} % de {tot / 3600:.1f} h")
         print(f"  {tr:14} : " + " | ".join(ligne))
+    for etat in ("EN_ROUTE", "A_QUAI"):
+        c = secondes[(etat, "marques")]
+        tot = sum(secondes[(etat, "avec")].values())
+        if tot:
+            print(f"avec mémoire, référence {etat} : instants s'appuyant sur une heure reconstruite "
+                  f"{100 * c['reconstruit'] / tot:.1f} %, dont heure réparée {100 * c['réparé'] / tot:.1f} %")
+    print(f"observations refusées (non placé), tous trains, un relevé = une observation : sans mémoire "
+          f"{refus['sans']} sur {n_obs} ({100 * refus['sans'] / n_obs:.1f} %), avec mémoire M2 "
+          f"{refus['avec']} ({100 * refus['avec'] / n_obs:.1f} %)")
     print(f"\ntrains avec au moins un instant en « position inconnue » : sans mémoire {len(trains_perte['sans'])}, "
           f"avec mémoire {len(trains_perte['avec'])}, sur {n_trains}")
     if detail:
