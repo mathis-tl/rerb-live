@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 
 from datetime import timedelta
 
-from mbta import apparier, grouper_par_course, lire_gps_mbta, lire_train_mbta
+from mbta import apparier, consolider_releve, grouper_par_course, lire_gps_mbta, lire_train_mbta
+from memoire import Memoire
 from position import Train
 
 RECU = datetime(2026, 11, 13, 5, 0, 4, tzinfo=timezone.utc)
@@ -75,6 +76,34 @@ class TestLireTrainMbta(unittest.TestCase):
         self.assertEqual(lire_train_mbta([], RECU).passages, [])
 
 
+class TestGareParent(unittest.TestCase):
+    PARENTS = {"NEC-2287": "place-sstat", "NEC-2287-06": "place-sstat", "NEC-2287-08": "place-sstat"}
+
+    def test_quai_remplace_par_la_gare_parent(self):
+        courses = [prediction("T1", "NEC-2287-08", 10, None, "2026-11-13T00:25:00-05:00"),
+                   prediction("T1", "B", 20, "2026-11-13T00:31:27-05:00", None)]
+        train = lire_train_mbta(courses, RECU, self.PARENTS)
+        self.assertEqual([p.gare for p in train.passages], ["place-sstat", "B"])
+
+    def test_sans_table_identifiant_inchange(self):
+        self.assertEqual([p.gare for p in lire_train_mbta(COURSE, RECU).passages], ["A", "B", "C"])
+
+    def test_changement_de_quai_ne_cree_pas_une_2e_gare_en_memoire(self):
+        # origine annoncée voie 8, puis voie 6 sans heure : une seule gare, départ mémorisé gardé
+        memoire = Memoire()
+        premier = [prediction("T1", "NEC-2287-08", 10, None, "2026-11-13T00:25:00-05:00"),
+                   prediction("T1", "B", 20, "2026-11-13T00:31:27-05:00", None)]
+        second = [prediction("T1", "NEC-2287-06", 10, None, None),
+                  prediction("T1", "B", 20, "2026-11-13T00:31:27-05:00", None)]
+        consolider_releve({"data": premier}, RECU, memoire, self.PARENTS)
+        _, trains = consolider_releve({"data": second}, RECU + timedelta(seconds=12), memoire, self.PARENTS)
+        passages = trains["T1"].passages
+        self.assertEqual([p.gare for p in passages].count("place-sstat"), 1)
+        origine = next(p for p in passages if p.gare == "place-sstat")
+        self.assertEqual(origine.depart, datetime(2026, 11, 13, 5, 25, 0, tzinfo=timezone.utc))  # heure mémorisée gardée
+        self.assertTrue(origine.reconstruit)
+
+
 class TestGrouperParCourse(unittest.TestCase):
     def test_regroupe_par_trip_id(self):
         corps = {"data": COURSE + [prediction("T2", "A", 10, None, "2026-11-13T01:00:00-05:00")]}
@@ -118,7 +147,7 @@ def gps(course, instant, recu=None):
 
 def releve(recu, *courses):
     corps = {"data": [p for c in courses for p in COURSE_DE(c)]}
-    return (recu, grouper_par_course(corps))
+    return consolider_releve(corps, recu, Memoire())
 
 
 def COURSE_DE(trip):
@@ -162,6 +191,25 @@ class TestApparier(unittest.TestCase):
     def test_perime_prioritaire_sur_course_absente(self):
         p = gps("T9", utc(10, 0, 5), recu=utc(10, 5, 0))
         self.assertEqual(apparier(p, self.RELEVES)[1], "GPS périmé")
+
+
+class TestConsoliderReleve(unittest.TestCase):
+    def test_gare_retiree_gardee_en_memoire(self):
+        # 1er relevé : A, B, C. 2e relevé : MBTA a retiré A (train parti). La mémoire garde A, marquée reconstruite.
+        memoire = Memoire()
+        consolider_releve({"data": COURSE}, RECU, memoire)
+        sans_a = [p for p in COURSE if p["relationships"]["stop"]["data"]["id"] != "A"]
+        _, trains = consolider_releve({"data": sans_a}, RECU + timedelta(seconds=12), memoire)
+        passages = trains["T1"].passages
+        self.assertEqual([p.gare for p in passages], ["A", "B", "C"])
+        self.assertTrue(passages[0].reconstruit)
+        self.assertFalse(passages[1].reconstruit)
+
+    def test_rend_recu_et_trains_par_course(self):
+        recu, trains = consolider_releve({"data": COURSE}, RECU, Memoire())
+        self.assertEqual(recu, RECU)
+        self.assertEqual(set(trains), {"T1"})
+        self.assertEqual(trains["T1"].recorded_at, RECU)
 
 
 if __name__ == "__main__":

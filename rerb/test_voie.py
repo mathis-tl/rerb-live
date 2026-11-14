@@ -13,6 +13,8 @@ from voie import (
     PointHorsVoie,
     Voie,
     charger_arrets,
+    charger_parents,
+    coordonnees_sur_voie,
     charger_formes,
     charger_trips,
     distance_sur_voie,
@@ -40,6 +42,35 @@ def ligne(x0, y0, x1, y1, pas=100.0):
 def boucle():
     """Aller vers l'est (y=0, PK 0 à 1000), demi-tour nord (1000 à 1100), retour vers l'ouest (y=100, 1100 à 2100)."""
     return ligne(0, 0, 1000, 0) + ligne(1000, 0, 1000, 100)[1:] + ligne(1000, 100, 0, 100)[1:]
+
+
+class TestChargerParents(unittest.TestCase):
+    def test_quais_relies_a_leur_gare(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            chemin = Path(d) / "stops.txt"
+            chemin.write_text("stop_id,stop_lat,stop_lon,parent_station\n"
+                              "place-x,1,2,\nX-1,1,2,place-x\nX-2,1,2,place-x\nY,3,4,\n", encoding="utf-8")
+            self.assertEqual(charger_parents(chemin), {"X-1": "place-x", "X-2": "place-x"})
+
+
+class TestCoordonneesSurVoie(unittest.TestCase):
+    def test_prend_le_quai_le_plus_proche_de_la_voie(self):
+        v = Voie(ligne(0, 0, 1000, 0))
+        proche, loin = pt(300, 20), pt(300, 120)
+        self.assertEqual(coordonnees_sur_voie(v, [loin, proche]), proche)
+
+    def test_liste_vide(self):
+        self.assertIsNone(coordonnees_sur_voie(Voie(ligne(0, 0, 1000, 0)), []))
+
+    def test_quai_valide_et_quai_hors_rayon(self):
+        v = Voie(ligne(0, 0, 1000, 0))
+        valide = pt(300, 20)
+        self.assertEqual(coordonnees_sur_voie(v, [pt(300, 500), valide]), valide)
+
+    def test_aucun_quai_a_moins_du_rayon(self):
+        v = Voie(ligne(0, 0, 1000, 0))
+        self.assertIsNone(coordonnees_sur_voie(v, [pt(300, 400)]))
 
 
 class TestPk(unittest.TestCase):

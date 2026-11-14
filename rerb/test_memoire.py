@@ -160,6 +160,27 @@ class TestMemoire(unittest.TestCase):
         out = m.consolider("k", train(Passage("A", None, h("08:00:00"), annule=True), B()))
         self.assertEqual(estimer(out, h("08:01:00"), distance).etat, Etat.NON_PLACE)
 
+    def test_m12_gare_reapparue_sans_aucune_heure_garde_les_heures_memorisees(self):
+        # MBTA : l'origine reste listée après le départ, mais sans heure (changement de quai). On garde la mémoire.
+        m = Memoire()
+        m.consolider("k", train(A(), B(), C(), D()))
+        out = m.consolider("k", train(p("A", None, None), B(), C(), D(), recorded="08:00:30"))
+        a = par_gare(out)["A"]
+        self.assertEqual(a.depart, h("08:00:00"))
+        self.assertTrue(a.reconstruit)
+        self.assertEqual([x.gare for x in out.passages], ["A", "B", "C", "D"])
+
+    def test_m12b_sans_memoire_une_gare_sans_heure_reste_telle_quelle(self):
+        out = Memoire().consolider("k", train(p("A", None, None), B(), C(), D()))
+        self.assertIsNone(par_gare(out)["A"].depart)
+
+    def test_m12c_gare_annulee_sans_heure_pas_remplacee(self):
+        m = Memoire()
+        m.consolider("k", train(A(), B(), C(), D()))
+        annulee = Passage("A", None, None, annule=True)
+        out = m.consolider("k", train(annulee, B(), C(), D()))
+        self.assertTrue(par_gare(out)["A"].annule)
+
     def test_m10_pas_de_memoire_sans_ancrage_dans_la_liste_precedente_vide(self):
         m = Memoire()
         out = m.consolider("k", Train([], h("08:00:00")))

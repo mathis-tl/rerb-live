@@ -63,6 +63,17 @@ class Voie:
         return suivants[0].pk
 
 
+def coordonnees_sur_voie(voie, coordonnees):
+    """Parmi les (lat, lon) des quais d'une gare, celui le plus proche de la voie (à moins du rayon), sinon None.
+    Les coordonnées d'une gare parent GTFS (le bâtiment) peuvent être à plus de 150 m des rails."""
+    meilleur, ecart = None, None
+    for lat, lon in coordonnees:
+        c = voie.candidats(lat, lon)
+        if c and (ecart is None or min(p.offset for p in c) < ecart):
+            meilleur, ecart = (lat, lon), min(p.offset for p in c)
+    return meilleur
+
+
 def pk_gares(voie, gares, premier_passage=False):
     """gares : [(identifiant, lat, lon)] dans l'ordre du train -> [(identifiant, PK)].
     Chaque gare prend le premier passage de la voie au-delà de la gare précédente.
@@ -104,6 +115,12 @@ def charger_trips(chemin):
     """trips.txt (GTFS) -> {trip_id: shape_id}."""
     with Path(chemin).open(newline="", encoding="utf-8") as f:
         return {r["trip_id"]: r["shape_id"] for r in csv.DictReader(f)}
+
+
+def charger_parents(chemin):
+    """stops.txt (GTFS) -> {stop_id: parent_station} pour les arrêts qui ont une gare parent (quais d'une même gare)."""
+    with Path(chemin).open(newline="", encoding="utf-8") as f:
+        return {r["stop_id"]: r["parent_station"] for r in csv.DictReader(f) if r.get("parent_station")}
 
 
 def charger_arrets(chemin):

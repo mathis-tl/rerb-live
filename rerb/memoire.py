@@ -28,8 +28,14 @@ class Memoire:
         """Train du relevé courant + gares retirées gardées en mémoire -> Train consolidé."""
         if not train.passages:
             return train
-        nouveaux = sorted(train.passages, key=_cle_temps)
-        presentes = {p.gare for p in train.passages}
+        # une gare listée sans aucune heure alors que la mémoire en a (MBTA : l'origine reste listée après le départ,
+        # souvent avec un autre quai) : on garde les heures mémorisées, marquées `reconstruit` (revue R1, point 1)
+        connues = {p.gare: p for p in self._precedent.get(cle, [])}
+        passages = [replace(connues[p.gare], reconstruit=True)
+                    if p.arrivee is None and p.depart is None and not p.annule and p.gare in connues else p
+                    for p in train.passages]
+        nouveaux = sorted(passages, key=_cle_temps)
+        presentes = {p.gare for p in passages}
         retirees = []
         for i, p in enumerate(self._precedent.get(cle, [])):
             if p.gare in presentes:
