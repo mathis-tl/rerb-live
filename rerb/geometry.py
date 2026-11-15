@@ -15,6 +15,7 @@ Bibliothèque standard seulement.
 """
 import json
 import math
+from bisect import bisect_right
 from collections import namedtuple
 from pathlib import Path
 
@@ -79,6 +80,33 @@ def clean_retraces(points, tolerance=10.0, min_gap=20.0):
         grid.setdefault((cx, cy), []).append(len(pile))
         pile.append(p); xs.append(x); ys.append(y)
     return pile
+
+
+def _point_au_pk(points, cum, pk):
+    """Point (lat, lon) à `pk` mètres du début de la ligne (interpolation linéaire sur le segment)."""
+    pk = max(0.0, min(pk, cum[-1]))
+    i = min(bisect_right(cum, pk) - 1, len(points) - 2)
+    seg = cum[i + 1] - cum[i]
+    t = 0.0 if seg == 0 else (pk - cum[i]) / seg
+    return (points[i][0] + t * (points[i + 1][0] - points[i][0]),
+            points[i][1] + t * (points[i + 1][1] - points[i][1]))
+
+
+def extraire(points, cum, pk_debut, pk_fin):
+    """Sous-ligne entre deux PK, dans l'ordre pk_debut -> pk_fin (retournée si pk_debut > pk_fin)."""
+    bas, haut = sorted((pk_debut, pk_fin))
+    sous = [_point_au_pk(points, cum, bas)]
+    sous += [p for p, c in zip(points, cum) if bas < c < haut]
+    sous.append(_point_au_pk(points, cum, haut))
+    return sous if pk_debut <= pk_fin else sous[::-1]
+
+
+def point_a_distance(chemin, distance):
+    """Point (lat, lon) à `distance` mètres du début d'une polyligne ; hors bornes : extrémité la plus proche."""
+    cum = cumulative(chemin)
+    if len(chemin) == 1:
+        return chemin[0]
+    return _point_au_pk(chemin, cum, distance)
 
 
 def station_passes(points, cum, lat, lon, radius=150.0):
@@ -148,6 +176,21 @@ class Geometry:
         pa, pb = self._passes_of(a), self._passes_of(b)
         candidates = [abs(y.pk - x.pk) for xs, ys in zip(pa, pb) for x in xs for y in ys]
         return choose_distance(candidates, straight, self._low, self._high)
+
+    def chemin(self, a, b):
+        """Polyligne (lat, lon) de a vers b le long des rails, sur le MÊME candidat que `distance`
+        (tâche 4, J1). Lève KeyError (gare inconnue) ou NoValidDistance (aucun candidat plausible)."""
+        if a == b:
+            return [self._stations[a]]
+        straight = self.straight(a, b)
+        pa, pb = self._passes_of(a), self._passes_of(b)
+        candidates = [(abs(y.pk - x.pk), i, x.pk, y.pk)
+                      for i, (xs, ys) in enumerate(zip(pa, pb)) for x in xs for y in ys]
+        choose_distance([c[0] for c in candidates], straight, self._low, self._high)  # lève si aucun valide
+        valid = [c for c in candidates if self._low * straight <= c[0] <= self._high * straight]
+        _, i, pk_a, pk_b = min(valid, key=lambda c: c[0])
+        points, cum = self._lines[i]
+        return extraire(points, cum, pk_a, pk_b)
 
     def neighbor_pairs(self):
         """Couples de gares voisines (consécutives sur un morceau), sans orientation, triés."""

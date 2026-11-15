@@ -13,7 +13,9 @@ from geometry import (
     choose_distance,
     clean_retraces,
     cumulative,
+    extraire,
     load_morceaux,
+    point_a_distance,
     station_passes,
 )
 from stops import load_stops
@@ -183,6 +185,15 @@ class TestDonneesReelles(unittest.TestCase):
             self.assertTrue(0.99 * vol <= d <= 1.35 * vol, (a, b, d, vol))
             n += 1
         self.assertEqual(n, 46)
+
+    def test_chemin_des_46_couples_voisins(self):
+        # J1 : longueur du chemin = distance (1 %) ; milieu à moins de 50 m du tracé
+        for (a, b) in self.g.neighbor_pairs():
+            c = self.g.chemin(a, b)
+            self.assertAlmostEqual(cumulative(c)[-1], self.g.distance(a, b), delta=0.01 * self.g.distance(a, b) + 5, msg=(a, b))
+            lat, lon = point_a_distance(c, cumulative(c)[-1] / 2)
+            proche = any(station_passes(p, cum, lat, lon, radius=50.0) for p, cum in self.g._lines)
+            self.assertTrue(proche, (a, b, lat, lon))
 
 
 if __name__ == "__main__":

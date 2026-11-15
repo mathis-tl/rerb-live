@@ -226,6 +226,20 @@ class TestGaresSauteesEtFraicheur(unittest.TestCase):
         e = estimer(t, h("08:03:00"), r.distance)
         self.assertAlmostEqual(e.distance_m, 2700.0)
 
+    def test_15d_reseau_chemin_des_gares(self):
+        r = Reseau({("A", "B"): 2400.0, ("B", "C"): 3000.0, ("B", "D"): 500.0})
+        self.assertEqual(r.chemin("A", "C"), ["A", "B", "C"])
+        self.assertEqual(r.chemin("C", "A"), ["C", "B", "A"])
+        self.assertEqual(r.chemin("D", "C"), ["D", "B", "C"])
+        self.assertEqual(r.chemin("B", "B"), ["B"])
+        with self.assertRaises(DistanceInconnue):
+            r.chemin("A", "Z")
+
+    def test_15e_reseau_chemin_non_relie(self):
+        r = Reseau({("A", "B"): 2400.0, ("X", "Y"): 100.0})
+        with self.assertRaises(DistanceInconnue):
+            r.chemin("A", "X")
+
     def test_15c_reseau_gare_inconnue_ou_non_reliee(self):
         r = Reseau({("A", "B"): 2400.0, ("X", "Y"): 100.0})
         with self.assertRaises(DistanceInconnue):

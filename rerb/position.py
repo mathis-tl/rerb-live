@@ -178,6 +178,29 @@ class Reseau:
                     file.append(voisin)
         raise DistanceInconnue(f"gares non reliées : {a} et {b}")
 
+    def chemin(self, a, b):
+        """Gares traversées de a à b (chemin unique de l'arbre), extrémités comprises."""
+        for g in (a, b):
+            if g not in self._voisins:
+                raise DistanceInconnue(f"gare inconnue : {g}")
+        parents = {a: None}
+        file = deque([a])
+        while file:
+            courant = file.popleft()
+            if courant == b:
+                break
+            for voisin, _ in self._voisins[courant]:
+                if voisin not in parents:
+                    parents[voisin] = courant
+                    file.append(voisin)
+        if b not in parents:
+            raise DistanceInconnue(f"gares non reliées : {a} et {b}")
+        gares = []
+        while b is not None:
+            gares.append(b)
+            b = parents[b]
+        return gares[::-1]
+
 
 def distance_depuis_reseau(reseau):
     """Adapte un Reseau indexé par numéro de gare aux identifiants PRIM 'STIF:StopArea:SP:<n>:'."""
