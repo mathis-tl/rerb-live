@@ -88,6 +88,10 @@ URL_HSL_TU = "https://realtime.hsl.fi/realtime/trip-updates/v2/hsl"
 URL_HSL_VP = "https://realtime.hsl.fi/realtime/vehicle-positions/v2/hsl"
 URL_PRIM_ET = "https://prim.iledefrance-mobilites.fr/marketplace/estimated-timetable?LineRef=STIF%3ALine%3A%3AC01743%3A"
 URL_PRIM_SM = "https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring?MonitoringRef=STIF%3AStopArea%3ASP%3A58774%3A"
+URL_PRIM_SM_GARE = "https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring?MonitoringRef=STIF%3AStopArea%3ASP%3A{}%3A"
+GARES_CSV = Path(__file__).resolve().parent.parent / "rerb" / "donnees" / "arrets_rerb_C01743.csv"
+GARES_INTERVAL = 30       # la source PRIM ne change que toutes les ~30 s (mesuré le 15/11/2026)
+GARES_DAILY_CAP = 300_000  # 47 gares x 2 880 cycles = 135 360 par jour ; plafond PRIM 1 000 000
 MQTT_HOST, MQTT_PORT = "mqtt.hsl.fi", 8883
 MQTT_TOPIC = "/hfp/v2/journey/ongoing/vp/train/#"  # trains seulement
 KEPT_HEADERS = ("date", "last-modified", "content-type", "etag", "age")
@@ -385,6 +389,52 @@ def http_job(stream, url, headers, writer, journal, transform=None,
     return job
 
 
+def load_gares(path):
+    """Numéros de gares (partie finale de stop_id) lus dans le CSV des arrêts, sans doublon, dans l'ordre."""
+    import csv
+    out = []
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            n = row["stop_id"].rsplit(":", 1)[-1]
+            if n and n not in out:
+                out.append(n)
+    return out
+
+
+def gares_job(stream, url_template, gares, headers, writer, journal, gate=None, pause=0.2):
+    """Un cycle = un appel par gare, écrits d'un bloc (une ligne par appel, corps brut).
+
+    Un statut 401, 403 ou 429 arrête le cycle (on ne martèle pas un service qui refuse).
+    gate : fonction qui répond non quand le quota du jour est épuisé ; les appels restants sont sautés.
+    """
+    def job():
+        lines, premier = [], None
+        for n in gares:
+            if gate is not None and not gate():
+                journal.count(stream, "quota_skip")
+                journal.log(f"{stream} cycle interrompu : quota du jour atteint")
+                break
+            url = url_template.format(n)
+            res = fetch(url, headers)
+            recv = utc_now()
+            premier = premier or recv
+            lines.append(json.dumps(make_record(stream, url, res, res["body"], False, recv)).encode())
+            ok = res["status"] == 200 and not res["error"]
+            journal.count(stream, "ok" if ok else "err")
+            journal.count(stream, "bytes", len(res["body"] or b""))
+            if not ok:
+                journal.log(f"{stream} erreur gare {n} status={res['status']} {res['error']}")
+            if res["status"] in (401, 403, 429):
+                journal.count(stream, "limite")
+                journal.log(f"{stream} cycle arrêté : status {res['status']}")
+                break
+            if pause:
+                time.sleep(pause)
+        if lines:
+            writer.append(stream, lines, when=premier)
+    return job
+
+
 def poll(name, interval, job, stop, journal, start_delay=0.0):
     """Appelle job toutes les `interval` s sans dérive ; une erreur n'arrête jamais la boucle.
 
@@ -572,6 +622,9 @@ def build_parser():
     ap.add_argument("--prim-daily-cap", type=int, default=PRIM_DAILY_CAP)
     ap.add_argument("--quota-file", default=str(Path.home() / ".rerb-prim-quota.json"),
                     help="compteur d'appels PRIM, partagé entre tous les dossiers de sortie")
+    ap.add_argument("--gares-interval", type=float, default=GARES_INTERVAL)
+    ap.add_argument("--gares-daily-cap", type=int, default=GARES_DAILY_CAP)
+    ap.add_argument("--gares-quota-file", default=str(Path.home() / ".rerb-prim-gares-quota.json"))
     ap.add_argument("--witness-interval", type=float, default=3600)
     ap.add_argument("--min-free-gb", type=float, default=5)
     return ap
@@ -584,8 +637,10 @@ def main(argv=None):
     sources = {s.strip() for s in a.sources.split(",") if s.strip()}
     if "prim" in sources and not (a.prim_interval >= PRIM_MIN_INTERVAL):  # écrit ainsi pour refuser aussi nan
         ap.error(f"--prim-interval minimum {PRIM_MIN_INTERVAL} s (quota PRIM)")
+    if "primgares" in sources and not (a.gares_interval >= 20):
+        ap.error("--gares-interval minimum 20 s")
     env = load_env(a.env) if Path(a.env).exists() else {}
-    for src, key in (("mbta", "MBTA_API_KEY"), ("prim", "PRIM_API_KEY")):
+    for src, key in (("mbta", "MBTA_API_KEY"), ("prim", "PRIM_API_KEY"), ("primgares", "PRIM_API_KEY")):
         if src in sources:
             if not env.get(key):
                 ap.error(f"{key} absente de {a.env}")
@@ -598,7 +653,7 @@ def main(argv=None):
     locks = []  # objets à garder vivants : le verrou dure tant que le programme tourne
     try:
         locks.append(acquire_lock(out / ".lock"))
-        if "prim" in sources:  # un seul processus à la fois peut appeler PRIM (compteur de quota partagé)
+        if "prim" in sources or "primgares" in sources:  # un seul processus à la fois peut appeler PRIM (compteur de quota partagé)
             locks.append(acquire_lock(str(a.quota_file) + ".lock"))
     except RuntimeError as e:
         ap.error(str(e))
@@ -639,6 +694,16 @@ def main(argv=None):
         add("prim_stop_monitoring", a.prim_interval,
             http_job("prim_stop_monitoring", URL_PRIM_SM, h, writer, journal, gate=quota.allow),
             delay=a.prim_interval / 2)  # décalé d'une demi-période pour étaler les appels
+    if "primgares" in sources:
+        gares = load_gares(GARES_CSV)
+        if not gares:
+            ap.error(f"aucune gare lue dans {GARES_CSV}")
+        gq = DailyQuota(a.gares_quota_file, a.gares_daily_cap)
+        add("prim_stop_monitoring_gares", a.gares_interval,
+            gares_job("prim_stop_monitoring_gares", URL_PRIM_SM_GARE, gares, {"apikey": env["PRIM_API_KEY"]},
+                      writer, journal, gate=gq.allow),
+            delay=a.gares_interval / 3)
+        journal.log(f"primgares : {len(gares)} gares toutes les {a.gares_interval:g} s")
     for name, target, args in (("disk_guard", disk_guard, (out, a.min_free_gb, stop, journal, failed)),
                                ("stats_loop", stats_loop, (journal, stop))):
         t = threading.Thread(target=target, args=args, daemon=True, name=name)

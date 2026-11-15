@@ -27,6 +27,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = b"pas du gzip"
             self.send_response(200)
             self.send_header("Content-Encoding", "gzip")
+        elif self.path.startswith("/sm/"):
+            n = self.path.rsplit("/", 1)[1]
+            body = b"{}"
+            self.send_response({"111": 429, "222": 500}.get(n, 200))
         elif self.path == "/redir":
             body = b""
             self.send_response(302)
@@ -289,6 +293,51 @@ class TestHttpJob(unittest.TestCase):
         recorder.http_job("s", self.base + "/ok", None, self.w, self.j, gate=lambda: False)()
         self.assertEqual(list(Path(self.d.name).rglob("s_*.jsonl.gz")), [])
         self.assertEqual(self.j.counters["s"]["quota_skip"], 1)
+
+
+class TestGares(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.TemporaryDirectory()
+        self.j = recorder.Journal(Path(self.d.name) / "l.log")
+        self.w = recorder.Writer(self.d.name)
+        self.srv, self.base = serveur()
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.d.cleanup()
+
+    def test_lecture_des_gares_du_csv(self):
+        csv = Path(self.d.name) / "g.csv"
+        csv.write_text("id,stop_id,stop_name\nIDFM:C01743,IDFM:monomodalStopPlace:58774,Massy\n"
+                       "IDFM:C01743,IDFM:monomodalStopPlace:43193,Antony\n"
+                       "IDFM:C01743,IDFM:monomodalStopPlace:58774,Massy\n")
+        self.assertEqual(recorder.load_gares(csv), ["58774", "43193"])
+
+    def test_un_cycle_ecrit_une_ligne_par_gare(self):
+        job = recorder.gares_job("g", self.base + "/sm/{}", ["1", "2", "3"], None, self.w, self.j, pause=0)
+        job()
+        recs = lire(next(Path(self.d.name).rglob("g_*.jsonl.gz")))
+        self.assertEqual([r["url"].rsplit("/", 1)[1] for r in recs], ["1", "2", "3"])
+        self.assertEqual(self.j.counters["g"]["ok"], 3)
+
+    def test_une_erreur_n_arrete_pas_le_cycle(self):
+        recorder.gares_job("g", self.base + "/sm/{}", ["1", "222", "3"], None, self.w, self.j, pause=0)()
+        recs = lire(next(Path(self.d.name).rglob("g_*.jsonl.gz")))
+        self.assertEqual(len(recs), 3)
+        self.assertEqual((self.j.counters["g"]["ok"], self.j.counters["g"]["err"]), (2, 1))
+
+    def test_429_arrete_le_cycle_et_le_signale(self):
+        recorder.gares_job("g", self.base + "/sm/{}", ["1", "111", "3"], None, self.w, self.j, pause=0)()
+        recs = lire(next(Path(self.d.name).rglob("g_*.jsonl.gz")))
+        self.assertEqual(len(recs), 2)  # la 3e gare n'est pas appelée
+        self.assertEqual(self.j.counters["g"]["limite"], 1)
+
+    def test_quota_epuise_saute_les_appels_restants(self):
+        q = recorder.DailyQuota(Path(self.d.name) / "q.json", 2)
+        recorder.gares_job("g", self.base + "/sm/{}", ["1", "2", "3"], None, self.w, self.j, gate=q.allow, pause=0)()
+        recs = lire(next(Path(self.d.name).rglob("g_*.jsonl.gz")))
+        self.assertEqual(len(recs), 2)
+        self.assertEqual(self.j.counters["g"]["quota_skip"], 1)
 
 
 class TestPoll(unittest.TestCase):

@@ -30,6 +30,8 @@ Arrêt propre : Ctrl-C (SIGINT), SIGTERM ou fermeture du terminal (SIGHUP). Le p
 
 **Un seul enregistreur à la fois par dossier** (verrou `.lock`), et un seul enregistreur utilisant PRIM à la fois sur la machine (verrou `~/.rerb-prim-quota.json.lock`). **Quota PRIM :** le compteur d'appels du jour est dans `~/.rerb-prim-quota.json`, partagé entre tous les dossiers, plafond 1 450 appels par jour UTC. Les appels faits à la main en dehors de l'enregistreur ne sont pas comptés : garder de la marge. Pour un test court pendant que le 24 h tourne, ajouter `--sources mbta,hsl` (sans PRIM).
 
+**2e collecte (15/11/2026), multi-gares :** source `primgares` = `stop-monitoring` sur les 47 gares du RER B (liste lue dans `rerb/donnees/arrets_rerb_C01743.csv`), un cycle toutes les 30 s (`--gares-interval`, minimum 20 s), corps brut gardé, flux `prim_stop_monitoring_gares`. Quota séparé : compteur `~/.rerb-prim-gares-quota.json`, plafond 300 000 par jour UTC (`--gares-daily-cap`) pour 135 360 prévus. Un 401, 403 ou 429 arrête le cycle en cours. Commande lancée : `caffeinate -i .venv/bin/python recorder.py --sources prim,primgares --out ~/rerb-data-2 --duration <secondes jusqu'à 17:00>`. Le verrou PRIM est commun à `prim` et `primgares`.
+
 **Code de sortie :** 0 si arrêt normal, 1 si un fil est mort ou si le disque est presque plein.
 
 ## Sortie
