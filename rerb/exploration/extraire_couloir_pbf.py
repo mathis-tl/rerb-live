@@ -34,9 +34,11 @@ def garder(tags, g, type_):
     elements.append({"type": type_, "tags": tags, "geometry": g})
 
 
-fp = osmium.FileProcessor(str(pbf), osmium.osm.WAY | osmium.osm.AREA).with_locations().with_areas() \
+fp = osmium.FileProcessor(str(pbf), osmium.osm.NODE | osmium.osm.WAY | osmium.osm.RELATION | osmium.osm.AREA).with_locations().with_areas() \
     .with_filter(osmium.filter.KeyFilter(*CLES))
 for o in fp:
+    if o.is_node() or o.is_relation():
+        continue
     tags = {t.k: t.v for t in o.tags}
     if o.is_way():
         # lignes : rues, cours d'eau, voies ferrées (hors quais) ; le reste est traité comme zone ci-dessous
