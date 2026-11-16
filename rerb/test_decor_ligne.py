@@ -41,6 +41,14 @@ class TestRequetes(unittest.TestCase):
         self.assertTrue(all(q.startswith("[out:json]") and "out geom" in q for q in r))
         self.assertIn("around:350,", r[0])
 
+    def test_coupe_aux_grands_ecarts(self):
+        # deux tronçons de 5 points séparés de ~11 km : jamais de couloir tracé entre les deux
+        a = [(2.0 + i * 0.002, 48.0) for i in range(5)]
+        b = [(2.0 + i * 0.002, 48.1) for i in range(5)]
+        r = requetes(a + b, rayon_m=350, par_requete=30, ecart_max_m=700)
+        self.assertEqual(len(r), 2)
+        self.assertNotIn("48.0,2.008,48.1,2.0", r[0] + r[1])
+
     def test_un_seul_point_ne_plante_pas(self):
         self.assertEqual(len(requetes([(2.0, 48.0)], 350, 30)), 1)
 
@@ -48,8 +56,8 @@ class TestRequetes(unittest.TestCase):
         self.assertEqual(requetes([], 350, 30), [])
 
     def test_coordonnees_dans_l_ordre_lat_lon(self):
-        q = requetes([(2.25, 48.75), (2.26, 48.76)], 350, 30)[0]
-        self.assertIn("350,48.75,2.25,48.76,2.26", q)
+        q = requetes([(2.25, 48.75), (2.251, 48.751)], 350, 30)[0]
+        self.assertIn("350,48.75,2.25,48.751,2.251", q)
 
 
 class TestFusionner(unittest.TestCase):

@@ -112,6 +112,9 @@ def _gare_suivante(train, gare):
     return ordre[i + 1] if i + 1 < len(ordre) else None
 
 
+VITESSE_MAX_MS = 33.0   # 119 km/h : vitesse maximale du RER B (120 km/h) ; au-delà, les horaires PRIM sont impossibles
+
+
 def _nom_sur(nom_gare, ref):
     """Nom lisible d'une gare ; si PRIM envoie une référence absente de notre liste, on garde la référence brute."""
     if not ref:
@@ -131,15 +134,25 @@ def calculer_trains(releve, maintenant, distance, localiser, nom_gare):
         e = estimer(train, maintenant, distance)
         lat = lon = cap = None
         motif = e.motif
+        distance_m, vitesse, incoherent, motif_vitesse = e.distance_m, None, False, None
+        if e.etat == Etat.EN_ROUTE and e.duree_s and e.longueur_m is not None:
+            vitesse = e.longueur_m / e.duree_s
+            if vitesse > VITESSE_MAX_MS:
+                # Horaires impossibles (ex. 1 000 m en 12 s) : on n'affiche jamais plus de VITESSE_MAX_MS depuis le départ.
+                incoherent = True
+                distance_m = min(e.distance_m, VITESSE_MAX_MS * e.fraction * e.duree_s)
+                motif_vitesse = (f"horaires incohérents : {e.longueur_m:.0f} m en {e.duree_s:.0f} s "
+                                 f"({vitesse * 3.6:.0f} km/h) ; vitesse affichée limitée à {VITESSE_MAX_MS * 3.6:.0f} km/h")
         if e.etat in (Etat.A_QUAI, Etat.EN_ROUTE):
             suivante = e.gare_suivante if e.etat == Etat.EN_ROUTE else _gare_suivante(train, e.gare)
             try:
-                lat, lon, cap = localiser(e.gare, suivante, e.distance_m)
+                lat, lon, cap = localiser(e.gare, suivante, distance_m)
             except (KeyError, ValueError, DistanceInconnue) as erreur:
                 motif = f"position impossible ({erreur})"
         gare_pertinente = e.gare_suivante or e.gare
         sortie.append({
             "course": ref, "etat": e.etat.value, "motif": motif,
+            "horaires_incoherents": incoherent, "vitesse_implicite_ms": vitesse, "motif_vitesse": motif_vitesse,
             "gare": _nom_sur(nom_gare, e.gare),
             "gare_suivante": _nom_sur(nom_gare, e.gare_suivante),
             "lat": lat, "lon": lon, "cap": cap,

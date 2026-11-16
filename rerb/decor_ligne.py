@@ -41,16 +41,27 @@ def echantillonner(trace, pas_m=250.0):
     return points
 
 
-def requetes(points, rayon_m=350, par_requete=30):
-    """points (lon, lat) -> liste de requêtes Overpass QL (une par paquet, un point commun entre paquets)."""
+def _ecart_m(p, q):
+    return math.hypot((q[0] - p[0]) * M_PAR_DEG_LAT * math.cos(math.radians(p[1])), (q[1] - p[1]) * M_PAR_DEG_LAT)
+
+
+def requetes(points, rayon_m=350, par_requete=30, ecart_max_m=700.0):
+    """points (lon, lat) -> liste de requêtes Overpass QL (une par paquet, un point commun entre paquets).
+    Overpass relie les points d'un `around` dans l'ordre donné : on coupe donc le paquet dès que deux points consécutifs
+    sont à plus de `ecart_max_m` (le tracé IDFM est fait de morceaux qui ne se suivent pas)."""
     if not points:
         return []
-    paquets, i = [], 0
-    while True:
-        paquets.append(points[i:i + par_requete])
-        if i + par_requete >= len(points):
-            break
-        i += par_requete - 1
+    paquets, courant = [], [points[0]]
+    for p in points[1:]:
+        if _ecart_m(courant[-1], p) > ecart_max_m:
+            paquets.append(courant)
+            courant = [p]
+        elif len(courant) >= par_requete:
+            paquets.append(courant)
+            courant = [courant[-1], p]       # un point commun : pas de trou entre deux requêtes
+        else:
+            courant.append(p)
+    paquets.append(courant)
     sortie = []
     for p in paquets:
         coord = ",".join(f"{lat},{lon}" for lon, lat in p)

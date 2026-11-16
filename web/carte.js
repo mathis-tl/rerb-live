@@ -257,6 +257,7 @@ function detail_train() {
   $("detail").innerHTML = t
     ? `<b>${esc(t.etat)}${t.perime ? " (périmé)" : ""}</b><br>Gare : ${esc(t.gare || "—")}${t.gare_suivante ? "<br>Prochaine gare : " + esc(t.gare_suivante) : ""}`
       + `<br>Retard : ${minutes(t.retard_s)}<br>Mise à jour du train il y a ${t.age_s == null ? "?" : Math.round(t.age_s / 60)} min`
+      + (t.horaires_incoherents ? `<br><b class="retard">⚠ ${esc(t.motif_vitesse)}</b>` : "")
       + (t.reconstruit ? "<br><i>heures reconstruites (gare retirée par PRIM)</i>" : "") + `<br><span class="note">${esc(t.course)}</span>`
     : "Clique sur un train.";
 }
@@ -276,6 +277,8 @@ function panneau() {
   const p = placés();
   $("compteurs").innerHTML = `${trains.length} trains reçus : ${p.length} placés (${n("à quai")} à quai, ${n("en route")} en route, `
     + `${p.filter(t => t.perime).length} périmés), ${n("non placé")} non placés, ${n("terminé")} terminés, ${n("position inconnue")} position inconnue.`;
+  const incoherents = trains.filter(t => t.horaires_incoherents).length;
+  if (incoherents) $("compteurs").append(document.createElement("br"), `⚠ ${incoherents} train(s) aux horaires PRIM incohérents (vitesse limitée à 119 km/h).`);
   const speciaux = trains.filter(t => t.lat == null && t.etat !== "terminé");
   $("liste-speciaux").innerHTML = speciaux.slice(0, 12).map(t =>
     `<div class="special"><b>${esc(t.etat)}</b> <span class="motif">${esc(t.motif)}</span><br><span class="note">${esc(t.course)}</span></div>`).join("")

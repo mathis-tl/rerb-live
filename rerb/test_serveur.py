@@ -138,6 +138,33 @@ class TestCalculerTrains(unittest.TestCase):
         self.assertEqual(len(trains), 2)             # un nom introuvable ne fait pas disparaître les trains
         self.assertEqual(trains[0]["gare"], A)       # on affiche la référence brute plutôt que de planter
 
+    def test_horaires_impossibles_vitesse_limitee_et_marquee(self):
+        # 1 000 m en 10 s = 100 m/s : impossible. Affiché : au plus 33 m/s depuis le départ, train marqué incohérent.
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 70, 130)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=65), distance, localiser, nom)[0]
+        self.assertTrue(t["horaires_incoherents"])
+        self.assertAlmostEqual(t["vitesse_implicite_ms"], 100.0)
+        self.assertAlmostEqual(t["lat"], 48 + 165.0 / 1000.0)        # localiser(): lat = 48 + distance/1000 ; 33 m/s × 5 s
+        self.assertIsNotNone(t["motif_vitesse"])
+
+    def test_horaires_normaux_non_modifies(self):
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=180), distance, localiser, nom)[0]
+        self.assertFalse(t["horaires_incoherents"])
+        self.assertAlmostEqual(t["lat"], 48.5)                       # inchangé : 1 000 m en 240 s = 4,2 m/s
+        self.assertAlmostEqual(t["vitesse_implicite_ms"], 1000 / 240)
+
+    def test_juste_sous_la_limite_non_marque(self):
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 91, 200)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=65), distance, localiser, nom)[0]
+        self.assertFalse(t["horaires_incoherents"])
+
+    def test_a_quai_pas_de_vitesse(self):
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=30), distance, localiser, nom)[0]
+        self.assertFalse(t["horaires_incoherents"])
+        self.assertIsNone(t["vitesse_implicite_ms"])
+
     def test_retard_de_la_gare_suivante(self):
         r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360, vise_arr=180, vise_dep=240)]))
         t = calculer_trains(r, T0 + timedelta(seconds=120), distance, localiser, nom)[0]

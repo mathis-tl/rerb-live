@@ -59,6 +59,8 @@ class Estimation:
     gare_suivante: "str | None" = None
     fraction: "float | None" = None
     distance_m: "float | None" = None  # depuis `gare`
+    longueur_m: "float | None" = None  # en route : longueur du tronçon gare -> gare_suivante
+    duree_s: "float | None" = None     # en route : durée annoncée du tronçon (départ -> arrivée suivante)
     perime: bool = False
     reconstruit: bool = False          # une des gares utilisées vient de la mémoire
     repare: bool = False               # une des gares utilisées a une heure réparée
@@ -146,6 +148,7 @@ def estimer(train, t, distance, seuil_perime=SEUIL_PERIME):
             f = (t - depart) / (arrivee_suiv - depart)
             return Estimation(Etat.EN_ROUTE, gare=gare, gare_suivante=suivante,
                               fraction=f, distance_m=f * longueur, perime=perime,
+                              longueur_m=longueur, duree_s=(arrivee_suiv - depart).total_seconds(),
                               reconstruit=recon, repare=repare)
     raise AssertionError("inatteignable : t est entre la 1re arrivée et le dernier départ")
 
