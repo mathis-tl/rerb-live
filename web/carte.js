@@ -16,7 +16,7 @@ const COULEURS = { "à quai": [47, 133, 90], "en route": [43, 108, 176] };
 const GRIS = [160, 167, 173];
 const MASSY = { longitude: 2.2588, latitude: 48.7255 };
 
-let geo = null, trains = [], statut = null, mode = "mixte", rayon = 700, zoom = 9, selection = null;
+let geo = null, trains = [], statut = null, mode = "mixte", rayon = 700, zoom = 9, selection = null, gareChoisie = "58774", dernierePrevision = null;
 
 // --- Rame provisoire : 6 caisses en boîtes (105 m), cabine de tête plus sombre. La rame détaillée viendra en dernier.
 const L_CAISSE = 16.5, ECART = 1.2, LARGEUR = 2.8, HAUTEUR = 4.3;
@@ -63,7 +63,59 @@ const orientation = t => [0, 90 - (t.cap == null ? 0 : t.cap), 0];
 
 const placés = () => trains.filter(t => t.lat != null && t.lon != null);
 
-function calques() {
+// --- Animation PAR IDENTIFIANT de course (pas par rang : deck.gl apparie par rang, et la liste change d'ordre à chaque
+// relevé, ce qui faisait glisser un train depuis la position d'un autre). Chaque train glisse de sa position affichée vers
+// la nouvelle ; une correction de plus de 250 m (nouveau relevé PRIM) glisse plus lentement pour rester visible comme
+// correction, au lieu d'un saut. Train nouveau : posé directement. Train disparu : retiré.
+const affiches = new Map();     // course -> { de:[lon,lat,cap], vers:[lon,lat,cap], t0, duree }
+const SEUIL_CORRECTION_M = 250, DUREE_CORRECTION_MAX_MS = 12000;
+const metres = (a, b) => Math.hypot((b[0] - a[0]) * 74000, (b[1] - a[1]) * 111000);
+function ecartAngle(a, b) { return ((b - a + 540) % 360) - 180; }
+
+function positionAffichee(e, maintenant) {
+  const f = e.duree <= 0 ? 1 : Math.min(1, Math.max(0, (maintenant - e.t0) / e.duree));
+  const k = f * f * (3 - 2 * f);     // adouci
+  return [e.de[0] + (e.vers[0] - e.de[0]) * k, e.de[1] + (e.vers[1] - e.de[1]) * k, e.de[2] + ecartAngle(e.de[2], e.vers[2]) * k, f];
+}
+
+function majAffiches(maintenant) {
+  const presents = new Set();
+  placés().forEach(t => {
+    presents.add(t.course);
+    const vers = [t.lon, t.lat, t.cap == null ? 0 : t.cap];
+    const e = affiches.get(t.course);
+    if (!e) { affiches.set(t.course, { de: vers, vers, t0: maintenant, duree: 0 }); return; }
+    const [lon, lat, cap] = positionAffichee(e, maintenant);
+    const saut = metres([lon, lat], vers);
+    e.de = [lon, lat, cap]; e.vers = vers; e.t0 = maintenant;
+    e.duree = saut > SEUIL_CORRECTION_M ? Math.min(DUREE_CORRECTION_MAX_MS, saut / 50 * 1000) : INTERVALLE_MS;
+  });
+  for (const c of [...affiches.keys()]) if (!presents.has(c)) affiches.delete(c);
+}
+
+// trains placés, avec la position affichée (interpolée) à la place de la position reçue
+function placesAffiches(maintenant) {
+  return placés().map(t => {
+    const e = affiches.get(t.course);
+    if (!e) return t;
+    const [lon, lat, cap] = positionAffichee(e, maintenant);
+    return { ...t, lon, lat, cap };
+  });
+}
+
+let animation = null;
+function animer() {
+  if (animation) return;
+  const pas = () => {
+    animation = null;
+    const maintenant = performance.now();
+    afficher(maintenant);
+    if ([...affiches.values()].some(e => maintenant - e.t0 < e.duree)) animation = setTimeout(() => requestAnimationFrame(pas), 60);
+  };
+  animation = setTimeout(() => requestAnimationFrame(pas), 0);
+}
+
+function calques(maintenant = performance.now()) {
   const L = [];
   if (!geo) return L;
   L.push(new deck.PathLayer({
@@ -80,11 +132,10 @@ function calques() {
     visible: zoom >= 11.5, background: false, outlineWidth: 3, outlineColor: [255, 253, 248, 230], fontSettings: { sdf: true },
   }));
   const p = placés();
-  const transition = { getPosition: { duration: INTERVALLE_MS, type: "interpolation" }, getOrientation: 600 };
-  if (mode !== "train" && rayon > 0) {
+    if (mode !== "train" && rayon > 0) {
     L.push(new deck.ScatterplotLayer({
       id: "zone", data: p, getPosition: d => [d.lon, d.lat], getRadius: rayon, radiusUnits: "meters", filled: true, stroked: true,
-      getFillColor: [214, 158, 46, 55], getLineColor: [183, 121, 31, 200], lineWidthMinPixels: 1.5, transitions: transition,
+      getFillColor: [214, 158, 46, 55], getLineColor: [183, 121, 31, 200], lineWidthMinPixels: 1.5,
       updateTriggers: { getRadius: rayon },
     }));
   }
@@ -92,18 +143,24 @@ function calques() {
     L.push(new deck.ScatterplotLayer({
       id: "pastilles", data: p, getPosition: d => [d.lon, d.lat], getRadius: 1, radiusMinPixels: mode === "zone" ? 6 : 5,
       radiusMaxPixels: 7, getFillColor: couleurTrain, getLineColor: [255, 255, 255], stroked: true, lineWidthMinPixels: 1.5,
-      pickable: true, transitions: transition,
+      pickable: true,
+    }));
+  }
+  if (selection) {
+    L.push(new deck.ScatterplotLayer({
+      id: "selection", data: p.filter(d => d.course === selection), getPosition: d => [d.lon, d.lat], getRadius: 1,
+      radiusMinPixels: 16, radiusMaxPixels: 16, filled: false, stroked: true, getLineColor: [245, 158, 11], lineWidthMinPixels: 3,
     }));
   }
   if (mode !== "zone") {
     L.push(new deck.SimpleMeshLayer({
       id: "trains", data: p, mesh: MAILLAGE_CORPS, getPosition: d => [d.lon, d.lat, 0], getColor: couleurTrain,
-      getOrientation: orientation, sizeScale: 1, pickable: true, transitions: transition,
+      getOrientation: orientation, sizeScale: 1, pickable: true,
       material: { ambient: 0.55, diffuse: 0.6, shininess: 24, specularColor: [200, 200, 200] },
     }));
     L.push(new deck.SimpleMeshLayer({
       id: "cabines", data: p, mesh: MAILLAGE_CABINE, getPosition: d => [d.lon, d.lat, 0], getColor: [38, 42, 48],
-      getOrientation: orientation, sizeScale: 1, transitions: transition,
+      getOrientation: orientation, sizeScale: 1,
     }));
   }
   return L;
@@ -111,7 +168,7 @@ function calques() {
 
 // --- Deck
 let deckgl = null;
-function afficher() { if (deckgl) deckgl.setProps({ layers: calques() }); }
+function afficher(maintenant = performance.now()) { if (deckgl) deckgl.setProps({ layers: calques(maintenant) }); }
 
 function creerDeck() {
   deckgl = new deck.Deck({
@@ -133,7 +190,7 @@ function creerDeck() {
     },
     onClick: ({ object }) => {
       selection = object && object.course ? object.course : selection;
-      detail();
+      detail_train(); afficherProchains(); afficher();
     },
   });
 }
@@ -154,7 +211,7 @@ function boiteLigne() {
 const $ = id => document.getElementById(id);
 function minutes(s) { return s == null ? "inconnu" : (s >= 0 ? "+" : "−") + Math.round(Math.abs(s) / 60) + " min"; }
 
-function detail() {
+function detail_train() {
   const t = trains.find(x => x.course === selection);
   $("detail").innerHTML = t
     ? `<b>${t.etat}${t.perime ? " (périmé)" : ""}</b><br>Gare : ${t.gare || "—"}${t.gare_suivante ? "<br>Prochaine gare : " + t.gare_suivante : ""}`
@@ -184,15 +241,63 @@ function panneau() {
     + (speciaux.length > 12 ? `<div class="note">… et ${speciaux.length - 12} autres</div>` : "");
 }
 
+// --- Prochains trains à la gare choisie (stop-monitoring, via /gare : cache 60 s côté serveur)
+const heureParis = iso => new Intl.DateTimeFormat("fr-FR", { timeZone: "Europe/Paris", hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+function ecrire(el, ...noeuds) { el.replaceChildren(...noeuds); }
+function noeud(tag, texte, classe) { const n = document.createElement(tag); if (texte != null) n.textContent = texte; if (classe) n.className = classe; return n; }
+
+function afficherProchains() {
+  const d = dernierePrevision, corps = $("prochains").tBodies[0], etat = $("etat-gare");
+  if (!d) { ecrire(corps); etat.textContent = "Chargement…"; return; }
+  const messages = [];
+  if (d.demo) messages.push("démonstration : trains inventés");
+  if (d.bloque) messages.push("clé PRIM refusée ou quota atteint : plus aucun appel");
+  else if (d.statut === "plafond") messages.push("plafond d'appels du jour atteint");
+  else if (d.statut === "erreur") messages.push("dernier appel en échec (" + d.erreur + ")");
+  if (d.age_s != null) messages.push("données de la gare il y a " + d.age_s + " s");
+  etat.textContent = messages.join(" ; ") || "Aucune donnée.";
+  const maintenant = Date.now();
+  const lignes = d.passages.map(p => {
+    const tr = noeud("tr", null, "ligne" + (p.course === selection ? " choisi" : ""));
+    const minutesAvant = Math.round((new Date(p.heure_estimee) - maintenant) / 60000);
+    tr.append(noeud("td", p.a_quai ? "à quai" : heureParis(p.heure_estimee), "heure"));
+    const infos = noeud("td");
+    infos.append(noeud("div", p.destination || "?"));
+    const detail = noeud("div", null, "note");
+    detail.append((p.mission ? p.mission + " · " : "") + (p.a_quai ? "" : (minutesAvant <= 0 ? "maintenant" : "dans " + minutesAvant + " min")));
+    infos.append(detail);
+    tr.append(infos);
+    const droite = noeud("td");
+    if (p.annule) droite.append(noeud("span", "annulé", "badge annule"));
+    else if (p.retard_s == null) droite.append(noeud("span", "retard ?", "note"));
+    else droite.append(noeud("span", Math.abs(p.retard_s) < 60 ? "à l'heure" : "+" + Math.round(p.retard_s / 60) + " min", Math.abs(p.retard_s) < 60 ? "ponctuel" : "retard"));
+    tr.append(droite);
+    tr.addEventListener("click", () => { selection = p.course; detail_train(); afficherProchains(); afficher(); });
+    return tr;
+  });
+  if (!lignes.length) { const tr = noeud("tr"); tr.append(noeud("td", d.statut === "plafond" ? "—" : "Aucun passage à venir dans la réponse.")); lignes.push(tr); }
+  ecrire(corps, ...lignes);
+}
+
+async function actualiserGare() {
+  try {
+    const r = await fetch("/gare?ref=" + encodeURIComponent(gareChoisie), { cache: "no-store" });
+    dernierePrevision = r.ok ? await r.json() : { passages: [], statut: "erreur", erreur: "serveur HTTP " + r.status, age_s: null };
+  } catch (e) {
+    dernierePrevision = { passages: [], statut: "erreur", erreur: "serveur local injoignable", age_s: null };
+  }
+  afficherProchains();
+}
+
 async function actualiser() {
   try {
     const r = await fetch("/trains", { cache: "no-store" });
     const d = await r.json();
-    statut = d; trains = d.trains;
+    statut = d; trains = d.trains; majAffiches(performance.now());
   } catch (e) {
     statut = { ...(statut || {}), erreur: "serveur local injoignable", bloque: false, plafond: (statut && statut.plafond) || { utilises: "?", maximum: "?" } };
   }
-  panneau(); detail(); afficher();
+  panneau(); detail_train(); afficher(); animer();
 }
 
 async function demarrer() {
@@ -204,6 +309,12 @@ async function demarrer() {
   r.addEventListener("input", () => fixer(r.value));
   document.querySelectorAll("[data-rayon]").forEach(b => b.addEventListener("click", () => fixer(b.dataset.rayon)));
   geo = await (await fetch("/geo")).json();
+  const choix = $("choix-gare");
+  [...geo.gares].sort((a, b) => a.nom.localeCompare(b.nom, "fr")).forEach(g => {
+    const o = noeud("option", g.nom); o.value = g.ref; choix.append(o);
+  });
+  choix.value = gareChoisie;
+  choix.addEventListener("change", () => { gareChoisie = choix.value; dernierePrevision = null; afficherProchains(); actualiserGare(); });
   creerDeck();
   $("vue-ligne").addEventListener("click", () => aller(boiteLigne()));
   $("vue-massy").addEventListener("click", () => aller({ ...MASSY, zoom: 13.2, pitch: 55, bearing: 0 }));
@@ -216,6 +327,8 @@ async function demarrer() {
   }
   await actualiser();
   setInterval(actualiser, INTERVALLE_MS);
+  actualiserGare();
+  setInterval(actualiserGare, 15000);   // le serveur ne rappelle PRIM qu'au plus toutes les 60 s par gare
 }
 
 demarrer();

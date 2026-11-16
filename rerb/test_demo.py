@@ -5,7 +5,8 @@ Sert à voir la carte sans appeler PRIM. Les données sont fausses par construct
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from demo import livraison_demo
+from demo import livraison_demo, stop_monitoring_demo
+from gare import lire_passages
 from memoire import Memoire
 from position import Etat, estimer
 from serveur import consolider_livraison
@@ -68,6 +69,43 @@ class TestDemo(unittest.TestCase):
 
     def test_deterministe(self):
         self.assertEqual(livraison_demo(T, CHAINE, distance, nombre=6), livraison_demo(T, CHAINE, distance, nombre=6))
+
+
+class TestStopMonitoringDemo(unittest.TestCase):
+    def nom(self, ref):
+        return f"Gare {CHAINE.index(ref) + 1}"
+
+    def test_passages_a_la_gare_du_milieu(self):
+        rep = stop_monitoring_demo(T, CHAINE[2], CHAINE, distance, self.nom)
+        passages = lire_passages(rep, T, limite=50)
+        self.assertGreater(len(passages), 0)
+        heures = [p["heure_estimee"] for p in passages]
+        self.assertEqual(heures, sorted(heures))
+        self.assertTrue(all(p["destination"] in ("Gare 1", "Gare 5") for p in passages))
+
+    def test_destination_est_le_terminus_du_sens(self):
+        rep = stop_monitoring_demo(T, CHAINE[2], CHAINE, distance, self.nom)
+        visites = rep["StopMonitoringDelivery"][0]["MonitoredStopVisit"]
+        for v in visites:
+            j = v["MonitoredVehicleJourney"]
+            ref = j["FramedVehicleJourneyRef"]["DatedVehicleJourneyRef"]
+            if ref.startswith("DEMO-A-") or ref.startswith("DEMO-PERIME-"):
+                self.assertEqual(j["DestinationName"][0]["value"], "Gare 5", ref)
+            elif ref.startswith("DEMO-R-"):
+                self.assertEqual(j["DestinationName"][0]["value"], "Gare 1", ref)
+
+    def test_a_quai_coherent_avec_les_heures(self):
+        for minute in range(0, 90, 2):
+            instant = T + timedelta(minutes=minute)
+            rep = stop_monitoring_demo(instant, CHAINE[2], CHAINE, distance, self.nom)
+            for p in lire_passages(rep, instant, limite=50):
+                if p["a_quai"]:
+                    return
+        self.fail("jamais de train à quai en 90 min")
+
+    def test_gare_hors_chaine_reponse_vide(self):
+        rep = stop_monitoring_demo(T, "STIF:StopArea:SP:999:", CHAINE, distance, self.nom)
+        self.assertEqual(lire_passages(rep, T), [])
 
 
 if __name__ == "__main__":

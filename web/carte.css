@@ -20,5 +20,12 @@ input[type=range] { width: 100%; }
 #legende b { display: block; margin-bottom: 3px; }
 .pastille { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin: 0 4px 0 8px; vertical-align: -1px; }
 .pastille.zone { background: rgba(214, 158, 46, .5); border: 1px solid #b7791f; }
+select { font: inherit; width: 100%; padding: 4px 6px; margin-bottom: 4px; }
+#prochains { width: 100%; border-collapse: collapse; font-size: 13px; }
+#prochains td { padding: 3px 4px; border-bottom: 1px solid #eee; vertical-align: top; }
+#prochains tr.ligne { cursor: pointer; } #prochains tr.ligne:hover { background: #eef4fb; }
+#prochains tr.choisi { background: #fff3cd; } #prochains .heure { font-weight: 600; white-space: nowrap; }
+.retard { color: #b83232; } .ponctuel { color: #2f855a; } .badge { display: inline-block; font-size: 11px; padding: 0 5px; border-radius: 8px; background: #2f855a; color: #fff; }
+.badge.annule { background: #b83232; }
 .special { padding: 3px 0; border-bottom: 1px dashed #d9d2c3; font-size: 13px; }
 .special .motif { color: #7a5c00; }

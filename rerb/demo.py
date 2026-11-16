@@ -61,3 +61,31 @@ def livraison_demo(maintenant, chaine, distance, nombre=20, gap_s=150):
     annule[1]["ArrivalStatus"] = "CANCELLED"
     courses.append(_course("DEMO-ANNULE", maintenant - timedelta(seconds=20), annule))
     return {"EstimatedTimetableDelivery": [{"EstimatedJourneyVersionFrame": [{"EstimatedVehicleJourney": courses}]}]}
+
+
+def _heure(texte):
+    return datetime.fromisoformat(texte.replace("Z", "+00:00"))
+
+
+def stop_monitoring_demo(maintenant, gare, chaine, distance, nom_gare, nombre=20, gap_s=150):
+    """Réponse au format `stop-monitoring` de PRIM pour `gare`, tirée des mêmes trains inventés que `livraison_demo`.
+    `nom_gare(ref)` donne le nom de la gare d'arrivée (DestinationName). Gare hors chaîne : réponse sans visite."""
+    visites = []
+    liv = livraison_demo(maintenant, chaine, distance, nombre, gap_s)
+    for ej in liv["EstimatedTimetableDelivery"][0]["EstimatedJourneyVersionFrame"][0]["EstimatedVehicleJourney"]:
+        appels = ej["EstimatedCalls"]
+        ici = next((c for c in appels if c["StopPointRef"]["value"] == gare), None)
+        if ici is None:
+            continue
+        terminus = max(appels, key=lambda c: _heure(c["ExpectedArrivalTime"]))["StopPointRef"]["value"]
+        arrivee, depart = _heure(ici["ExpectedArrivalTime"]), _heure(ici["ExpectedDepartureTime"])
+        appel = {"VehicleAtStop": arrivee <= maintenant <= depart}
+        appel.update({k: ici[k] for k in ("ExpectedArrivalTime", "ExpectedDepartureTime", "AimedArrivalTime", "AimedDepartureTime")})
+        if "CANCELLED" in (ici.get("ArrivalStatus"), ici.get("DepartureStatus")):
+            appel["DepartureStatus"] = "cancelled"
+        visites.append({"MonitoredVehicleJourney": {
+            "LineRef": {"value": "STIF:Line::C01743:"},
+            "FramedVehicleJourneyRef": {"DatedVehicleJourneyRef": ej["DatedVehicleJourneyRef"]},
+            "DestinationName": [{"value": nom_gare(terminus)}], "VehicleJourneyName": [{"value": "DEMO"}],
+            "MonitoredCall": appel}})
+    return {"StopMonitoringDelivery": [{"MonitoredStopVisit": visites}]}

@@ -4,6 +4,7 @@ Plan : docs/plan-tache-4.md (J3, arrêt S3 : 1 appel / 120 s à la demande, plaf
 Données inventées ; les heures sont en UTC.
 """
 import json
+import math
 import tempfile
 import threading
 import unittest
@@ -14,6 +15,7 @@ from pathlib import Path
 from geometry import NoValidDistance
 from memoire import Memoire
 from position import Etat
+from gare import ReleveurGares
 from serveur import (CSV_GARES, TRACE, ErreurPrim, Plafond, Releve, Releveur, calculer_trains, chaine_demo, charger_geo,
                      construire_contexte, consolider_livraison, creer_serveur, lire_cle)
 
@@ -345,8 +347,18 @@ class TestHttp(unittest.TestCase):
         (self.web / "note.exe").write_text("non", encoding="utf-8")
         (Path(self.dossier.name) / "dehors.txt").write_text("hors racine", encoding="utf-8")
         self.geo = {"trace": [[[2.0, 48.0], [2.1, 48.1]]], "gares": [{"nom": "Gare A", "lon": 2.0, "lat": 48.0}]}
+        self.appels_gare = []
+
+        def fetch_gare(gare):
+            self.appels_gare.append(gare)
+            return {"StopMonitoringDelivery": [{"MonitoredStopVisit": [{"MonitoredVehicleJourney": {
+                "LineRef": {"value": "STIF:Line::C01743:"}, "FramedVehicleJourneyRef": {"DatedVehicleJourneyRef": "T1"},
+                "DestinationName": [{"value": "Aéroport CDG"}], "VehicleJourneyName": [{"value": "EAGE09"}],
+                "MonitoredCall": {"VehicleAtStop": False, "ExpectedDepartureTime": h(400), "AimedDepartureTime": h(300)}}}]}]}
+        self.gares = ReleveurGares(fetch_gare, Plafond(Path(self.dossier.name) / "pg.json", 100, lambda: date(2026, 11, 16)))
         self.serveur = creer_serveur(self.releveur, distance, localiser, nom, port=0, horloge=self.horloge,
-                                     racine_web=self.web, geo=self.geo)
+                                     racine_web=self.web, geo=self.geo, releveur_gares=self.gares,
+                                     gares={"58774": "Massy - Palaiseau", "47940": "Massy - Verrières"})
         threading.Thread(target=self.serveur.serve_forever, daemon=True).start()
         self.addCleanup(self.serveur.server_close)
         self.addCleanup(self.serveur.shutdown)
@@ -429,6 +441,42 @@ class TestHttp(unittest.TestCase):
         with urllib.request.urlopen(f"http://127.0.0.1:{demo.server_address[1]}/statut") as r:
             self.assertIs(json.loads(r.read())["demo"], True)
 
+    def test_gare_prochains_trains(self):
+        with urllib.request.urlopen(self.base + "/gare?ref=58774") as r:
+            corps = json.loads(r.read())
+        self.assertEqual((corps["ref"], corps["gare"], corps["statut"]), ("58774", "Massy - Palaiseau", "ok"))
+        self.assertEqual([p["course"] for p in corps["passages"]], ["T1"])
+        self.assertEqual(corps["passages"][0]["retard_s"], 100.0)
+        self.assertEqual(corps["plafond"], {"utilises": 1, "maximum": 100})
+        self.assertIs(corps["demo"], False)
+        self.assertEqual(self.appels_gare, ["STIF:StopArea:SP:58774:"])
+
+    def test_gare_cache_pas_de_second_appel(self):
+        for _ in range(3):
+            urllib.request.urlopen(self.base + "/gare?ref=58774").read()
+        self.assertEqual(len(self.appels_gare), 1)
+
+    def test_gare_refus_des_references_non_listees(self):
+        import http.client
+        for chemin in ("/gare", "/gare?ref=", "/gare?ref=999", "/gare?ref=58774%26x%3D1", "/gare?ref=58774&ref=47940",
+                       "/gare?ref=../etc", "/gare?ref=58774%00", "/gare?autre=58774", "/gare?ref=%20 58774"):
+            c = http.client.HTTPConnection("127.0.0.1", self.serveur.server_address[1])
+            c.request("GET", chemin.replace(" ", "%20"))
+            reponse = c.getresponse()
+            reponse.read()
+            self.assertEqual(reponse.status, 404, chemin)
+            c.close()
+        self.assertEqual(self.appels_gare, [])     # aucune de ces requêtes ne doit provoquer d'appel PRIM
+
+    def test_gare_sans_releveur_404(self):
+        s = creer_serveur(self.releveur, distance, localiser, nom, port=0, horloge=self.horloge, racine_web=self.web)
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+        self.addCleanup(s.server_close)
+        self.addCleanup(s.shutdown)
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(f"http://127.0.0.1:{s.server_address[1]}/gare?ref=58774")
+        self.assertEqual(cm.exception.code, 404)
+
     def test_methode_post_refusee(self):
         requete = urllib.request.Request(self.base + "/trains", data=b"x", method="POST")
         with self.assertRaises(urllib.error.HTTPError) as cm:
@@ -442,6 +490,8 @@ class TestContexteReel(unittest.TestCase):
         geo = charger_geo()
         self.assertEqual(len(geo["gares"]), 47)
         self.assertGreater(len(geo["trace"]), 10)
+        self.assertIn("58774", {g["ref"] for g in geo["gares"]})
+        self.assertTrue(all(g["ref"].isdigit() for g in geo["gares"]))
         lon, lat = geo["trace"][0][0]
         self.assertTrue(2.0 < lon < 3.0 and 48.5 < lat < 49.1, (lon, lat))
 
@@ -459,6 +509,10 @@ class TestContexteReel(unittest.TestCase):
         for t in (en_route, a_quai):
             self.assertIsNotNone(t["cap"], t["motif"])
             self.assertTrue(0.0 <= t["cap"] < 360.0)
+        # à quai, la rame est posée SUR la voie (pas au centre de la gare) : pas de saut quand elle démarre
+        un_metre = calculer_trains(r, T0 + timedelta(seconds=60 + 240 / 300.0), distance_, localiser_, nom_)[0]
+        ecart = math.hypot((un_metre["lon"] - a_quai["lon"]) * 74000, (un_metre["lat"] - a_quai["lat"]) * 111000)
+        self.assertLess(ecart, 10.0, ecart)
         # Massy - Verrières est au nord-est de Massy - Palaiseau (+1 046 m vers le nord, +1 127 m vers l'est : cap direct ~47°)
         self.assertTrue(20.0 < en_route["cap"] < 70.0, en_route["cap"])
         self.assertTrue(20.0 < a_quai["cap"] < 70.0, a_quai["cap"])

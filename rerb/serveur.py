@@ -25,6 +25,7 @@ from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from gare import ReleveurGares
 from geometry import Geometry, load_morceaux, point_a_distance
 from memoire import Memoire
 from position import DistanceInconnue, Etat, Reseau, distance_depuis_reseau, estimer, lire_train
@@ -51,6 +52,8 @@ INTERVALLE_S = 120
 PLAFOND_JOUR = 1000
 STATUTS_CLE_REFUSEE = (401, 403, 429)
 URL_PRIM_ET = "https://prim.iledefrance-mobilites.fr/marketplace/estimated-timetable?LineRef=STIF%3ALine%3A%3AC01743%3A"
+URL_PRIM_SM_GARE = "https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring?MonitoringRef=STIF%3AStopArea%3ASP%3A{}%3A"
+PLAFOND_GARES_JOUR = 5000   # quota PRIM stop-monitoring : 1 000 000 par jour
 
 
 class ErreurPrim(Exception):
@@ -262,9 +265,11 @@ def fichier_statique(racine, chemin_url):
 
 
 def creer_serveur(releveur, distance, localiser, nom_gare, port=8765, horloge=None, racine_web=None, geo=None,
-                  demo=False):
+                  demo=False, releveur_gares=None, gares=None):
     """Serveur HTTP sur 127.0.0.1 seulement. `horloge()` -> instant UTC (remplaçable en test).
     Routes : /trains, /statut, /geo (tracé et gares), fichiers de `racine_web` (défaut : web/). Le reste : 404.
+    /gare?ref=<numéro> : prochains trains d'une gare (stop-monitoring), seulement si `releveur_gares` et `gares`
+    ({numéro: nom}, la liste blanche des gares autorisées) sont fournis ; toute autre valeur : 404, aucun appel PRIM.
     demo=True : les trains sont INVENTÉS ; la réponse porte `"demo": true` pour que la page l'annonce."""
     horloge = horloge or (lambda: datetime.now(timezone.utc))
     racine_web = Path(racine_web) if racine_web is not None else WEB
@@ -295,12 +300,29 @@ def creer_serveur(releveur, distance, localiser, nom_gare, port=8765, horloge=No
             self.end_headers()
             self.wfile.write(octets)
 
+        def _ref_gare(self):
+            """Valeur du paramètre `ref` si c'est EXACTEMENT un paramètre de la liste blanche, sinon None."""
+            requete = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True, strict_parsing=False)
+            valeurs = requete.get("ref", [])
+            if len(requete) != 1 or len(valeurs) != 1 or valeurs[0] not in gares:
+                return None
+            return valeurs[0]
+
         def do_GET(self):
             route = self.path.split("?")[0]
             if route in ("/trains", "/statut"):
                 corps = charge_utile()
                 if route == "/statut":
                     corps.pop("trains")
+                self._envoyer(json.dumps(corps, ensure_ascii=False).encode("utf-8"), TYPES[".json"])
+            elif route == "/gare" and releveur_gares is not None and gares is not None:
+                ref = self._ref_gare()
+                if ref is None:
+                    self.send_error(404)
+                    return
+                resultat = releveur_gares.passages(f"STIF:StopArea:SP:{ref}:", horloge())
+                corps = {"ref": ref, "gare": gares[ref], **resultat, "demo": demo, "bloque": releveur_gares.bloque,
+                         "plafond": {"utilises": releveur_gares.plafond.utilises, "maximum": releveur_gares.plafond.maximum}}
                 self._envoyer(json.dumps(corps, ensure_ascii=False).encode("utf-8"), TYPES[".json"])
             elif route == "/geo" and geo is not None:
                 self._envoyer(json.dumps(geo, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), TYPES[".json"])
@@ -327,7 +349,8 @@ def _charger(csv_gares, trace):
 
 def construire_contexte(csv_gares=CSV_GARES, trace=TRACE):
     """Fichiers statiques -> (distance, localiser, nom_gare) pour `calculer_trains`. Hors ligne, aucun appel API.
-    localiser(gare, gare_suivante, distance_m) -> (lat, lon, cap) : sur les rails (J1) ; à quai : coordonnées de la gare."""
+    localiser(gare, gare_suivante, distance_m) -> (lat, lon, cap) : toujours sur les rails (J1) ; sans gare suivante (terminus),
+    coordonnées de la gare."""
     gares, geometrie, reseau = _charger(csv_gares, trace)
 
     @functools.lru_cache(maxsize=None)
@@ -341,9 +364,7 @@ def construire_contexte(csv_gares=CSV_GARES, trace=TRACE):
         chemin = troncon(a, stop_area_number(suivante))
         d = distance_m or 0.0
         cap = cap_degres(point_a_distance(chemin, max(d - 4.0, 0.0)), point_a_distance(chemin, d + 4.0))
-        if d == 0.0:   # à quai : position de la gare
-            return (gares[a].lat, gares[a].lon, cap)
-        lat, lon = point_a_distance(chemin, d)
+        lat, lon = point_a_distance(chemin, d)   # à quai (d = 0) : début du tronçon, SUR la voie, sans saut au démarrage
         return (lat, lon, cap)
 
     def nom_gare(ref):
@@ -360,7 +381,7 @@ def chaine_demo(nom_depart="Massy - Palaiseau", nom_arrivee="Gare du Nord", csv_
 
 
 def charger_geo(csv_gares=CSV_GARES, trace=TRACE):
-    """Tracé et gares pour la carte : {"trace": [[[lon, lat], ...], ...], "gares": [{nom, lon, lat}]} (5 décimales ~ 1 m)."""
+    """Tracé et gares pour la carte : {"trace": [[[lon, lat], ...], ...], "gares": [{ref, nom, lon, lat}]} (5 décimales ~ 1 m)."""
     morceaux = []
     for m in load_morceaux(trace):
         ligne = []
@@ -369,7 +390,7 @@ def charger_geo(csv_gares=CSV_GARES, trace=TRACE):
             if not ligne or p != ligne[-1]:
                 ligne.append(p)
         morceaux.append(ligne)
-    gares = [{"nom": g.name, "lon": round(g.lon, 5), "lat": round(g.lat, 5)} for g in load_stops(csv_gares).values()]
+    gares = [{"ref": n, "nom": g.name, "lon": round(g.lon, 5), "lat": round(g.lat, 5)} for n, g in load_stops(csv_gares).items()]
     return {"trace": morceaux, "gares": gares}
 
 
@@ -388,23 +409,33 @@ def main(argv=None):
     ap.add_argument("--intervalle", type=int, default=INTERVALLE_S, help="secondes entre deux appels PRIM (minimum 60)")
     ap.add_argument("--plafond", type=int, default=PLAFOND_JOUR, help="appels PRIM maximum par jour")
     ap.add_argument("--fichier-plafond", default=str(Path.home() / ".rerb-prim-serveur-plafond.json"))
+    ap.add_argument("--plafond-gares", type=int, default=PLAFOND_GARES_JOUR, help="appels stop-monitoring maximum par jour")
+    ap.add_argument("--fichier-plafond-gares", default=str(Path.home() / ".rerb-prim-serveur-gares-plafond.json"))
     ap.add_argument("--demo", action="store_true", help="trains INVENTÉS, aucun appel PRIM, aucune clé lue")
     a = ap.parse_args(argv)
     distance, localiser, nom_gare = construire_contexte()
     if a.demo:
-        from demo import livraison_demo
+        from demo import livraison_demo, stop_monitoring_demo
         chaine = chaine_demo()
         source = lambda: livraison_demo(datetime.now(timezone.utc), chaine, distance)  # noqa: E731
         releveur = Releveur(source, Plafond(os.devnull, 10 ** 9), intervalle_s=5)
+        nom_ = nom_gare
+        releveur_gares = ReleveurGares(
+            lambda ref: stop_monitoring_demo(datetime.now(timezone.utc), ref, chaine, distance, nom_),
+            Plafond(os.devnull, 10 ** 9), intervalle_s=5)
         message = "MODE DÉMONSTRATION : trains inventés, aucun appel PRIM, aucune clé lue"
     else:
         if a.intervalle < 60 or a.plafond > 1400:
             ap.error("intervalle >= 60 s et plafond <= 1 400 par jour (quota PRIM : 1 500)")
         cle = lire_cle(a.env)
         releveur = Releveur(lambda: appeler_prim(cle), Plafond(a.fichier_plafond, a.plafond), a.intervalle)
-        message = (f"1 appel PRIM au plus toutes les {a.intervalle} s, quand une page le demande ; "
-                   f"plafond {a.plafond} par jour")
-    serveur = creer_serveur(releveur, distance, localiser, nom_gare, a.port, geo=charger_geo(), demo=a.demo)
+        releveur_gares = ReleveurGares(lambda ref: appeler_prim(cle, URL_PRIM_SM_GARE.format(ref.split(":")[3])),
+                                       Plafond(a.fichier_plafond_gares, a.plafond_gares), intervalle_s=60)
+        message = (f"carte : 1 appel PRIM au plus toutes les {a.intervalle} s (plafond {a.plafond} par jour) ; "
+                   f"prochains trains : 1 appel par gare au plus toutes les 60 s (plafond {a.plafond_gares} par jour)")
+    noms = {n: g.name for n, g in _charger(CSV_GARES, TRACE)[0].items()}
+    serveur = creer_serveur(releveur, distance, localiser, nom_gare, a.port, geo=charger_geo(), demo=a.demo,
+                            releveur_gares=releveur_gares, gares=noms)
     print(f"carte sur http://127.0.0.1:{serveur.server_address[1]}/  ({message})", flush=True)
     try:
         serveur.serve_forever()
