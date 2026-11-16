@@ -14,8 +14,8 @@ from pathlib import Path
 from geometry import NoValidDistance
 from memoire import Memoire
 from position import Etat
-from serveur import (CSV_GARES, TRACE, ErreurPrim, Plafond, Releve, Releveur, calculer_trains, construire_contexte,
-                     consolider_livraison, creer_serveur, lire_cle)
+from serveur import (CSV_GARES, TRACE, ErreurPrim, Plafond, Releve, Releveur, calculer_trains, chaine_demo, charger_geo,
+                     construire_contexte, consolider_livraison, creer_serveur, lire_cle)
 
 T0 = datetime(2026, 11, 16, 10, 0, 0, tzinfo=timezone.utc)
 A, B, C = "STIF:StopArea:SP:1:", "STIF:StopArea:SP:2:", "STIF:StopArea:SP:3:"
@@ -43,8 +43,9 @@ def distance(a, b):
     return 1000.0
 
 
-def localiser(e):
-    return (48.0 + (e.fraction or 0), 2.0)
+def localiser(gare, suivante, distance_m):
+    """Fausse géométrie : 1 000 m entre gares ; latitude = 48 + avancement ; cap 90° (est)."""
+    return (48.0 + distance_m / 1000.0, 2.0, 90.0)
 
 
 def nom(ref):
@@ -87,6 +88,7 @@ class TestCalculerTrains(unittest.TestCase):
         self.assertEqual(t["etat"], Etat.EN_ROUTE.value)
         self.assertEqual((t["gare"], t["gare_suivante"]), ("Gare A", "Gare B"))
         self.assertAlmostEqual(t["lat"], 48.5)        # f = (180-60)/(300-60) = 0,5
+        self.assertEqual(t["cap"], 90.0)
         self.assertEqual(t["age_s"], 180)
         self.assertFalse(t["perime"])
 
@@ -118,7 +120,7 @@ class TestCalculerTrains(unittest.TestCase):
         self.assertIsNone(t["lon"])
 
     def test_localiser_echoue_pas_de_plantage(self):
-        def casse(e):
+        def casse(gare, suivante, distance_m):
             raise NoValidDistance("aucun candidat")
         r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
         t = calculer_trains(r, T0 + timedelta(seconds=180), distance, casse, nom)[0]
@@ -135,6 +137,34 @@ class TestCalculerTrains(unittest.TestCase):
         r = releve_de(course("T1", [appel(A, 0, 60), c]))
         t = calculer_trains(r, T0 + timedelta(seconds=120), distance, localiser, nom)[0]
         self.assertIsNone(t["retard_s"])
+
+    def test_a_quai_transmet_la_gare_suivante_pour_le_cap(self):
+        appels = []
+
+        def espion(gare, suivante, distance_m):
+            appels.append((gare, suivante, distance_m))
+            return (48.0, 2.0, 45.0)
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360), appel(C, 600, 660)]))
+        calculer_trains(r, T0 + timedelta(seconds=30), distance, espion, nom)
+        self.assertEqual(appels, [(A, B, 0.0)])
+
+    def test_a_quai_au_terminus_pas_de_gare_suivante(self):
+        appels = []
+
+        def espion(gare, suivante, distance_m):
+            appels.append((gare, suivante))
+            return (48.0, 2.0, None)
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=330), distance, espion, nom)[0]
+        self.assertEqual(appels, [(B, None)])
+        self.assertIsNone(t["cap"])
+
+    def test_non_place_cap_vide(self):
+        annule = appel(B, 300, 360)
+        annule["ArrivalStatus"] = "CANCELLED"
+        r = releve_de(course("T1", [appel(A, 0, 60), annule]))
+        t = calculer_trains(r, T0 + timedelta(seconds=180), distance, localiser, nom)[0]
+        self.assertIsNone(t["cap"])
 
     def test_aucun_train_masque(self):
         r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]),
@@ -307,7 +337,16 @@ class TestHttp(unittest.TestCase):
         plafond = Plafond(Path(self.dossier.name) / "p.json", 1000, lambda: date(2026, 11, 16))
         self.releveur = Releveur(f, plafond, intervalle_s=120)
         self.horloge = lambda: T0 + timedelta(seconds=180)
-        self.serveur = creer_serveur(self.releveur, distance, localiser, nom, port=0, horloge=self.horloge)
+        self.web = Path(self.dossier.name) / "web"
+        (self.web / "vendor").mkdir(parents=True)
+        (self.web / "index.html").write_text("<html>carte</html>", encoding="utf-8")
+        (self.web / "vendor" / "lib.js").write_text("var a=1;", encoding="utf-8")
+        (self.web / ".secret").write_text("non", encoding="utf-8")
+        (self.web / "note.exe").write_text("non", encoding="utf-8")
+        (Path(self.dossier.name) / "dehors.txt").write_text("hors racine", encoding="utf-8")
+        self.geo = {"trace": [[[2.0, 48.0], [2.1, 48.1]]], "gares": [{"nom": "Gare A", "lon": 2.0, "lat": 48.0}]}
+        self.serveur = creer_serveur(self.releveur, distance, localiser, nom, port=0, horloge=self.horloge,
+                                     racine_web=self.web, geo=self.geo)
         threading.Thread(target=self.serveur.serve_forever, daemon=True).start()
         self.addCleanup(self.serveur.server_close)
         self.addCleanup(self.serveur.shutdown)
@@ -339,9 +378,91 @@ class TestHttp(unittest.TestCase):
             urllib.request.urlopen(self.base + "/secret")
         self.assertEqual(cm.exception.code, 404)
 
+    def test_accueil_sert_index(self):
+        with urllib.request.urlopen(self.base + "/") as r:
+            self.assertEqual(r.read(), b"<html>carte</html>")
+            self.assertTrue(r.headers["Content-Type"].startswith("text/html"))
+
+    def test_fichier_statique_et_type(self):
+        with urllib.request.urlopen(self.base + "/vendor/lib.js") as r:
+            self.assertEqual(r.read(), b"var a=1;")
+            self.assertTrue(r.headers["Content-Type"].startswith("text/javascript"))
+
+    def test_statique_refuse_sortie_de_racine_dotfile_et_type_inconnu(self):
+        import http.client
+        for chemin in ("/../dehors.txt", "/%2e%2e/dehors.txt", "/vendor/../../dehors.txt", "/.secret", "/note.exe",
+                       "/vendor", "/vendor/", "/%00", "/vendor/lib.js%00.png"):
+            c = http.client.HTTPConnection("127.0.0.1", self.serveur.server_address[1])
+            c.request("GET", chemin)          # chemin brut, sans normalisation par urllib
+            reponse = c.getresponse()
+            corps = reponse.read()
+            self.assertEqual(reponse.status, 404, chemin)
+            self.assertNotIn(b"hors racine", corps, chemin)
+            c.close()
+
+    def test_geo(self):
+        with urllib.request.urlopen(self.base + "/geo") as r:
+            self.assertEqual(json.loads(r.read()), self.geo)
+
+    def test_csp_bloque_tout_reseau_externe_sur_chaque_reponse(self):
+        for chemin in ("/", "/vendor/lib.js", "/trains", "/geo"):
+            with urllib.request.urlopen(self.base + chemin) as r:
+                csp = r.headers["Content-Security-Policy"]
+            for directive in ("default-src 'none'", "script-src 'self'", "connect-src 'self'", "img-src 'self' data: blob:"):
+                self.assertIn(directive, csp, chemin)
+            self.assertNotIn("http", csp)
+            self.assertNotIn("*", csp)
+
+    def test_en_tetes_de_securite(self):
+        with urllib.request.urlopen(self.base + "/") as r:
+            self.assertEqual(r.headers["X-Content-Type-Options"], "nosniff")
+            self.assertEqual(r.headers["Referrer-Policy"], "no-referrer")
+
+    def test_demo_faux_par_defaut_et_annonce_vrai_en_demo(self):
+        with urllib.request.urlopen(self.base + "/statut") as r:
+            self.assertIs(json.loads(r.read())["demo"], False)
+        demo = creer_serveur(self.releveur, distance, localiser, nom, port=0, horloge=self.horloge,
+                             racine_web=self.web, geo=self.geo, demo=True)
+        threading.Thread(target=demo.serve_forever, daemon=True).start()
+        self.addCleanup(demo.server_close)
+        self.addCleanup(demo.shutdown)
+        with urllib.request.urlopen(f"http://127.0.0.1:{demo.server_address[1]}/statut") as r:
+            self.assertIs(json.loads(r.read())["demo"], True)
+
+    def test_methode_post_refusee(self):
+        requete = urllib.request.Request(self.base + "/trains", data=b"x", method="POST")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(requete)
+        self.assertIn(cm.exception.code, (405, 501))
+
 
 @unittest.skipUnless(TRACE.exists() and CSV_GARES.exists(), "fichiers statiques absents")
 class TestContexteReel(unittest.TestCase):
+    def test_geo_reel(self):
+        geo = charger_geo()
+        self.assertEqual(len(geo["gares"]), 47)
+        self.assertGreater(len(geo["trace"]), 10)
+        lon, lat = geo["trace"][0][0]
+        self.assertTrue(2.0 < lon < 3.0 and 48.5 < lat < 49.1, (lon, lat))
+
+    def test_chaine_demo_massy_gare_du_nord(self):
+        chaine = chaine_demo()
+        self.assertEqual(chaine[0], "STIF:StopArea:SP:58774:")
+        self.assertGreater(len(chaine), 15)
+        self.assertEqual(len(set(chaine)), len(chaine))
+
+    def test_cap_en_route_et_a_quai_sur_donnees_reelles(self):
+        distance_, localiser_, nom_ = construire_contexte()
+        r = releve_de(course("T1", [appel(self.MASSY_PAL, 0, 60), appel(self.MASSY_VER, 300, 360)]))
+        en_route = calculer_trains(r, T0 + timedelta(seconds=180), distance_, localiser_, nom_)[0]
+        a_quai = calculer_trains(r, T0 + timedelta(seconds=30), distance_, localiser_, nom_)[0]
+        for t in (en_route, a_quai):
+            self.assertIsNotNone(t["cap"], t["motif"])
+            self.assertTrue(0.0 <= t["cap"] < 360.0)
+        # Massy - Verrières est au nord-est de Massy - Palaiseau (+1 046 m vers le nord, +1 127 m vers l'est : cap direct ~47°)
+        self.assertTrue(20.0 < en_route["cap"] < 70.0, en_route["cap"])
+        self.assertTrue(20.0 < a_quai["cap"] < 70.0, a_quai["cap"])
+
     """Câblage réel (tracé et gares du dépôt, hors ligne) : un train entre Massy - Palaiseau et Massy - Verrières."""
     MASSY_PAL, MASSY_VER = "STIF:StopArea:SP:58774:", "STIF:StopArea:SP:47940:"
 

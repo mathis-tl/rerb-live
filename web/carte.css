@@ -1,0 +1,24 @@
+:root { --fond: #e9e4d8; --encre: #1d2a33; --rer: #2b6cb0; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { font: 15px/1.4 system-ui, sans-serif; color: var(--encre); background: var(--fond); display: flex; }
+#panneau { width: 340px; flex: none; padding: 14px 16px; overflow: auto; background: #fffdf8; border-right: 1px solid #d9d2c3; }
+#carte { position: relative; flex: 1; background: linear-gradient(#cfd8de, #e9e4d8); }
+h1 { font-size: 17px; margin: 0 0 6px; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin: 16px 0 6px; color: #5b6770; }
+.note { font-size: 13px; color: #44525c; }
+.bandeau { background: #fff3cd; border: 1px solid #e6c860; padding: 6px 8px; border-radius: 6px; font-size: 13px; margin: 8px 0; }
+.bandeau.erreur { background: #fde8e8; border-color: #e08a8a; }
+label.choix { display: block; padding: 5px 8px; border: 1px solid #d9d2c3; border-radius: 6px; margin: 4px 0; cursor: pointer; background: #fff; }
+label.choix input { margin-right: 6px; }
+button { font: inherit; padding: 4px 9px; margin: 2px 4px 2px 0; border: 1px solid #b9b19f; border-radius: 6px; background: #fff; cursor: pointer; }
+button:hover { background: #eef; }
+input[type=range] { width: 100%; }
+#valeur-rayon { font-weight: 600; }
+#legende { position: fixed; left: 356px; bottom: 12px; background: rgba(255, 253, 248, .93); border: 1px solid #d9d2c3;
+           border-radius: 8px; padding: 8px 10px; font-size: 13px; z-index: 5; }
+#legende b { display: block; margin-bottom: 3px; }
+.pastille { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin: 0 4px 0 8px; vertical-align: -1px; }
+.pastille.zone { background: rgba(214, 158, 46, .5); border: 1px solid #b7791f; }
+.special { padding: 3px 0; border-bottom: 1px dashed #d9d2c3; font-size: 13px; }
+.special .motif { color: #7a5c00; }

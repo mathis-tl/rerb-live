@@ -7,6 +7,8 @@ Plan : docs/plan-tache-4.md (J1, décision Q2 option 1).
 • point_sur_troncon : point à `distance_m` de A le long de cette polyligne (hors bornes : extrémité).
 Fonctions pures, bibliothèque standard seulement. Les gares sont désignées par leur numéro (stops.py).
 """
+import math
+
 from geometry import point_a_distance
 
 
@@ -23,3 +25,13 @@ def chemin_troncon(geometrie, reseau, a, b):
 
 def point_sur_troncon(geometrie, reseau, a, b, distance_m):
     return point_a_distance(chemin_troncon(geometrie, reseau, a, b), distance_m)
+
+
+def cap_degres(p, q):
+    """Cap de p vers q en degrés : 0 = nord, 90 = est, sens horaire. None si les deux points sont confondus.
+    Points proches (quelques mètres) : projection locale, la longitude est réduite par cos(latitude)."""
+    dy = q[0] - p[0]
+    dx = (q[1] - p[1]) * math.cos(math.radians((p[0] + q[0]) / 2))
+    if dx == 0 and dy == 0:
+        return None
+    return math.degrees(math.atan2(dx, dy)) % 360.0

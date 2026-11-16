@@ -9,7 +9,7 @@ from pathlib import Path
 from geometry import Geometry, cumulative, load_morceaux, station_passes
 from position import Reseau
 from stops import load_stops
-from troncon import chemin_troncon, point_sur_troncon
+from troncon import cap_degres, chemin_troncon, point_sur_troncon
 
 RACINE = Path(__file__).resolve().parent.parent
 CSV = Path(__file__).resolve().parent / "donnees/arrets_rerb_C01743.csv"
@@ -102,6 +102,25 @@ class TestRerbReel(unittest.TestCase):
                 total = self.r.distance(x, y)
                 p = point_sur_troncon(self.g, self.r, x, y, total / 2)
                 self.assertTrue(self.proche_du_trace(p), (x, y))
+
+
+class TestCap(unittest.TestCase):
+    """Cap = direction de marche en degrés, 0 = nord, 90 = est, sens horaire."""
+
+    def test_quatre_points_cardinaux(self):
+        p = (48.0, 2.0)
+        self.assertAlmostEqual(cap_degres(p, (48.001, 2.0)), 0.0, places=3)
+        self.assertAlmostEqual(cap_degres(p, (48.0, 2.001)), 90.0, places=3)
+        self.assertAlmostEqual(cap_degres(p, (47.999, 2.0)), 180.0, places=3)
+        self.assertAlmostEqual(cap_degres(p, (48.0, 1.999)), 270.0, places=3)
+
+    def test_nord_est_a_cette_latitude(self):
+        # 1e-3 degré de latitude = 111 m ; 1e-3 degré de longitude à 48° = 74,5 m : le cap n'est pas 45°
+        c = cap_degres((48.0, 2.0), (48.001, 2.001))
+        self.assertAlmostEqual(c, math.degrees(math.atan2(74.5, 111.0)), delta=0.3)
+
+    def test_points_identiques_pas_de_cap(self):
+        self.assertIsNone(cap_degres((48.0, 2.0), (48.0, 2.0)))
 
 
 if __name__ == "__main__":
