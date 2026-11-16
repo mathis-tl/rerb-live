@@ -1,7 +1,7 @@
 """Décor de toute la ligne : couloir autour du tracé, requêtes Overpass, fusion, cellules. Données inventées, aucun réseau."""
 import unittest
 
-from decor_ligne import echantillonner, requetes, fusionner, cellule_de, decouper_cellules
+from decor_ligne import Couloir, echantillonner, requetes, fusionner, cellule_de, decouper_cellules
 
 
 class TestEchantillonner(unittest.TestCase):
@@ -58,6 +58,34 @@ class TestRequetes(unittest.TestCase):
     def test_coordonnees_dans_l_ordre_lat_lon(self):
         q = requetes([(2.25, 48.75), (2.251, 48.751)], 350, 30)[0]
         self.assertIn("350,48.75,2.25,48.751,2.251", q)
+
+
+class TestCouloir(unittest.TestCase):
+    def setUp(self):
+        # voie droite plein nord, 2 km, points tous les 250 m
+        self.c = Couloir(echantillonner([[[2.0, 48.0], [2.0, 48.018]]], 250), rayon_m=350)
+
+    def test_sur_la_voie(self):
+        self.assertTrue(self.c.contient(2.0, 48.009))
+
+    def test_a_300_m_dedans_a_500_m_dehors(self):
+        self.assertTrue(self.c.contient(2.0 + 300 / 74000, 48.009))     # ~300 m a l'est
+        self.assertFalse(self.c.contient(2.0 + 500 / 74000, 48.009))
+
+    def test_au_dela_des_extremites(self):
+        self.assertFalse(self.c.contient(2.0, 48.03))
+        self.assertTrue(self.c.contient(2.0, 48.0 - 100 / 111000))
+
+    def test_loin(self):
+        self.assertFalse(self.c.contient(3.0, 49.0))
+
+    def test_couloir_vide(self):
+        self.assertFalse(Couloir([], 350).contient(2.0, 48.0))
+
+    def test_une_geometrie_dans_le_couloir_des_qu_un_sommet_y_est(self):
+        self.assertTrue(self.c.touche([(2.01, 48.009), (2.0 + 200 / 74000, 48.009)]))
+        self.assertFalse(self.c.touche([(2.01, 48.009), (2.02, 48.009)]))
+        self.assertFalse(self.c.touche([]))
 
 
 class TestFusionner(unittest.TestCase):

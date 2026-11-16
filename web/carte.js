@@ -126,20 +126,71 @@ const PALETTE = {
 };
 const palette = () => PALETTE[sombre.matches ? "sombre" : "clair"];
 function appliquerTheme() {
-  document.getElementById("carte").style.background = decor ? palette().fond : "";
+  document.getElementById("carte").style.background = (decor || indexDecor) ? palette().fond : "";
   document.documentElement.dataset.theme = sombre.matches ? "sombre" : "clair";
 }
+// Décor par cellules (web/data/decor/index.json + <cellule>.json, ~1,5 km chacune), chargées selon la vue à partir de ZOOM_DECOR.
+// Sans index : repli sur le fichier unique de Massy. Sans aucun fichier : pas de décor, la carte reste sans fond.
+const ZOOM_DECOR = 12.5, CELLULES_MAX = 80;
+let indexDecor = null, vueCarte = { longitude: 2.2588, latitude: 48.7255, zoom: 10.5 }, fusion = null, cleFusion = "";
+const cellulesDecor = new Map(), enChargement = new Set();   // cellule -> décor (null = absente/erreur)
+
+function clesVisibles() {
+  if (!indexDecor || vueCarte.zoom < ZOOM_DECOR) return [];
+  const t = indexDecor.taille_deg, demi = 360 / (512 * 2 ** vueCarte.zoom) * Math.max(innerWidth, innerHeight) / 2 * 2.2;
+  const existe = new Set(indexDecor.cellules), cles = [];
+  for (let x = Math.floor((vueCarte.longitude - demi) / t); x <= Math.floor((vueCarte.longitude + demi) / t); x++)
+    for (let y = Math.floor((vueCarte.latitude - demi * 0.7) / t); y <= Math.floor((vueCarte.latitude + demi * 0.7) / t); y++)
+      if (existe.has(x + "_" + y)) cles.push(x + "_" + y);
+  return cles.slice(0, CELLULES_MAX);
+}
+
+function decorVisible() {
+  if (!indexDecor) return decor;
+  const cles = clesVisibles().filter(k => cellulesDecor.get(k));
+  const cle = cles.join();
+  if (cle !== cleFusion) {
+    cleFusion = cle;
+    fusion = cles.length ? { source: indexDecor.source } : null;
+    ["batiments", "routes", "rails", "quais", "verts", "eaux", "cours_eau"].forEach(k => {
+      if (fusion) fusion[k] = cles.flatMap(c => cellulesDecor.get(c)[k]);
+    });
+  }
+  return fusion;
+}
+
+async function majDecor() {
+  const cles = clesVisibles();
+  const manquantes = cles.filter(k => !cellulesDecor.has(k) && !enChargement.has(k)).slice(0, 6);
+  if (!manquantes.length) return;
+  await Promise.all(manquantes.map(async k => {
+    enChargement.add(k);
+    try { const r = await fetch("/data/decor/" + k + ".json"); cellulesDecor.set(k, r.ok ? await r.json() : null); }
+    catch (e) { /* réessayé au prochain déplacement */ }
+    enChargement.delete(k);
+  }));
+  afficher();
+  if (clesVisibles().some(k => !cellulesDecor.has(k) && !enChargement.has(k))) majDecor();
+}
+
 async function chargerDecor() {
   try {
-    const r = await fetch("/data/decor-massy.json");
-    if (r.ok) { decor = await r.json(); $("source-decor").textContent = decor.source; $("source-decor").hidden = false; }
+    const ri = await fetch("/data/decor/index.json");
+    if (ri.ok) {
+      indexDecor = await ri.json();
+      $("source-decor").textContent = indexDecor.source; $("source-decor").hidden = false;
+      majDecor();
+    } else {
+      const r = await fetch("/data/decor-massy.json");
+      if (r.ok) { decor = await r.json(); $("source-decor").textContent = decor.source; $("source-decor").hidden = false; }
+    }
   } catch (e) { /* pas de décor : la carte reste sans fond */ }
   appliquerTheme(); afficher();
 }
 sombre.addEventListener("change", () => { appliquerTheme(); afficher(); });
 
 const LARGEUR_ROUTE = { grand: 12, moyen: 9, petit: 6, pieton: 2.5 };
-function calquesDecor() {
+function calquesDecor(decor) {
   const c = palette(), L = [];
   const poly = (id, data, couleur) => new deck.PolygonLayer({ id, data, getPolygon: d => d, getFillColor: couleur, stroked: false, filled: true });
   L.push(poly("verts", decor.verts, c.vert), poly("eaux", decor.eaux, c.eau));
@@ -156,7 +207,8 @@ function calquesDecor() {
 function calques(maintenant = performance.now()) {
   const L = [];
   if (!geo) return L;
-  if (decor) L.push(...calquesDecor());
+  const dv = decorVisible();
+  if (dv) L.push(...calquesDecor(dv));
   L.push(new deck.PathLayer({
     id: "trace", data: geo.trace, getPath: d => d, getColor: [120, 132, 142], widthUnits: "meters", getWidth: 5,
     widthMinPixels: 1.5, capRounded: true, jointRounded: true,
@@ -223,9 +275,12 @@ function creerDeck() {
       return null;
     },
     onViewStateChange: ({ viewState }) => {
-      const avant = zoom >= ZOOM_PASTILLE, avantNoms = zoom >= 11.5;
+      const avant = zoom >= ZOOM_PASTILLE, avantNoms = zoom >= 11.5, avantCle = cleFusion;
       zoom = viewState.zoom;
-      if ((zoom >= ZOOM_PASTILLE) !== avant || (zoom >= 11.5) !== avantNoms) afficher();
+      vueCarte = { longitude: viewState.longitude, latitude: viewState.latitude, zoom: viewState.zoom };
+      majDecor();
+      const changeDecor = indexDecor && clesVisibles().filter(k => cellulesDecor.get(k)).join() !== avantCle;
+      if ((zoom >= ZOOM_PASTILLE) !== avant || (zoom >= 11.5) !== avantNoms || changeDecor) afficher();
     },
     onClick: ({ object }) => {
       selection = object && object.course ? object.course : selection;
@@ -237,6 +292,8 @@ function creerDeck() {
 function aller(vue) {
   deckgl.setProps({ initialViewState: { ...vue, transitionDuration: 900, transitionInterpolator: new deck.FlyToInterpolator() } });
   zoom = vue.zoom;
+  vueCarte = { longitude: vue.longitude, latitude: vue.latitude, zoom: vue.zoom };
+  majDecor();
   afficher();
 }
 

@@ -70,6 +70,37 @@ def requetes(points, rayon_m=350, par_requete=30, ecart_max_m=700.0):
     return sortie
 
 
+class Couloir:
+    """Ensemble des points à moins de `rayon_m` d'un des points échantillonnés du tracé (grille de cases de `rayon_m`)."""
+
+    def __init__(self, points, rayon_m=350.0):
+        self.rayon = rayon_m
+        self._m_lon = M_PAR_DEG_LAT * math.cos(math.radians(sum(p[1] for p in points) / len(points))) if points else 1.0
+        self._cases = {}
+        for lon, lat in points:
+            self._cases.setdefault(self._case(lon, lat), []).append(self._xy(lon, lat))
+
+    def _xy(self, lon, lat):
+        return (lon * self._m_lon, lat * M_PAR_DEG_LAT)
+
+    def _case(self, lon, lat):
+        x, y = self._xy(lon, lat)
+        return (math.floor(x / self.rayon), math.floor(y / self.rayon))
+
+    def contient(self, lon, lat):
+        if not self._cases:
+            return False
+        cx, cy = self._case(lon, lat)
+        x, y = self._xy(lon, lat)
+        r2 = self.rayon ** 2
+        return any((x - px) ** 2 + (y - py) ** 2 <= r2
+                   for i in (-1, 0, 1) for j in (-1, 0, 1) for px, py in self._cases.get((cx + i, cy + j), ()))
+
+    def touche(self, sommets):
+        """Vrai si au moins un sommet (lon, lat) est dans le couloir."""
+        return any(self.contient(lon, lat) for lon, lat in sommets)
+
+
 def fusionner(reponses):
     """Plusieurs réponses Overpass -> une seule, sans doublon (type, id). ValueError si une réponse est illisible."""
     vus, elements = set(), []
