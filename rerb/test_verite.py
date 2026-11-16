@@ -7,7 +7,8 @@ Fonctions pures sur des ensembles de références de courses ; données inventé
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from verite import (SEUILS, classer_a_quai, departs_observes, ecart_depart, rapport, verdict)
+from verite import (ECART_MAX_GARES, SEUILS, classer_a_quai, departs_observes, departs_par_gare, ecart_depart,
+                    nombre_trous, rapport, verdict)
 
 
 def h(secondes):
@@ -99,6 +100,35 @@ class TestRapport(unittest.TestCase):
         r = rapport({"vrai positif": 0, "manqué : autre état estimé": 0, "manqué : train absent des prévisions": 0,
                      "faux positif": 0, "estimé à quai, absent de stop-monitoring": 0})
         self.assertEqual(r["rappel"], (0, 0))
+
+
+
+class TestMultiGares(unittest.TestCase):
+    """J2 bis : 47 gares, relevé toutes les 30 s ; un train est identifié par (gare, course)."""
+
+    def test_ecart_max_param(self):
+        r = [(h(0), {"A"}), (h(60), set())]
+        self.assertEqual(departs_observes(r), [("A", h(0), h(60))])                  # 150 s par défaut : gardé
+        self.assertEqual(departs_observes(r, ecart_max=ECART_MAX_GARES), [])         # 45 s : trou, ignoré
+
+    def test_ecart_max_gares_fixe(self):
+        self.assertEqual(ECART_MAX_GARES, timedelta(seconds=45))
+
+    def test_departs_par_gare_independants(self):
+        # même course A à deux gares, sorties à des instants différents
+        r = {"G1": [(h(0), {"A"}), (h(30), set())],
+             "G2": [(h(5), {"A"}), (h(35), {"A"}), (h(65), set())]}
+        self.assertEqual(sorted(departs_par_gare(r)),
+                         [("G1", "A", h(0), h(30)), ("G2", "A", h(35), h(65))])
+
+    def test_departs_par_gare_trou_ecarte(self):
+        r = {"G1": [(h(0), {"A"}), (h(120), set())]}
+        self.assertEqual(departs_par_gare(r), [])
+
+    def test_nombre_trous(self):
+        r = {"G1": [(h(0), set()), (h(30), set()), (h(130), set())], "G2": [(h(0), set()), (h(90), set())]}
+        self.assertEqual(nombre_trous(r), 2)     # G1 : 100 s ; G2 : 90 s ; seuil 45 s
+        self.assertEqual(nombre_trous({}), 0)
 
 
 if __name__ == "__main__":

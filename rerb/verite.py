@@ -9,7 +9,9 @@ Fonctions pures. Limite : `VehicleAtStop` et les heures estimées viennent du m�
 """
 from datetime import timedelta
 
-ECART_MAX_RELEVES = timedelta(seconds=150)  # au-delà, un relevé manque : départ inobservable
+ECART_MAX_RELEVES = timedelta(seconds=150)  # au-delà, un relevé manque : départ inobservable (Massy, relevé /2 min)
+# J2 bis (47 gares, relevé /30 s, lecture ±15 s) : 45 s = 30 s + gigue ; fixé AVANT de regarder les résultats.
+ECART_MAX_GARES = timedelta(seconds=45)
 
 # (bon à partir de, inquiétant en dessous de) ; pour les durées : (bon jusqu'à, sans objet)
 SEUILS = {"rappel": (0.80, 0.60), "précision": (0.80, 0.60),
@@ -31,15 +33,27 @@ def classer_a_quai(vrais, visibles, connus, predits):
     }
 
 
-def departs_observes(releves):
+def departs_observes(releves, ecart_max=ECART_MAX_RELEVES):
     """releves : [(instant, ensemble des courses à quai)] en ordre croissant.
     -> [(course, dernier relevé à quai, premier relevé suivant sans elle)] ; trou de relevés trop long : ignoré."""
     sorties = []
     for (t1, avant), (t2, apres) in zip(releves, releves[1:]):
-        if t2 - t1 > ECART_MAX_RELEVES:
+        if t2 - t1 > ecart_max:
             continue
         sorties += [(c, t1, t2) for c in sorted(avant - apres)]
     return sorties
+
+
+def departs_par_gare(releves_par_gare, ecart_max=ECART_MAX_GARES):
+    """releves_par_gare : {gare: [(instant, courses à quai)]} -> [(gare, course, bas, haut)]. Chaque gare est
+    une suite de relevés indépendante (J2 bis)."""
+    return [(g, c, bas, haut) for g, rel in releves_par_gare.items()
+            for c, bas, haut in departs_observes(rel, ecart_max)]
+
+
+def nombre_trous(releves_par_gare, ecart_max=ECART_MAX_GARES):
+    """Nombre d'intervalles entre deux relevés consécutifs d'une même gare plus longs que `ecart_max`."""
+    return sum(1 for rel in releves_par_gare.values() for (t1, _), (t2, _) in zip(rel, rel[1:]) if t2 - t1 > ecart_max)
 
 
 def ecart_depart(estime, bas, haut):
