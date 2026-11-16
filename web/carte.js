@@ -115,9 +115,48 @@ function animer() {
   animation = setTimeout(() => requestAnimationFrame(pas), 0);
 }
 
+// --- Décor 3D (OpenStreetMap, fichier local web/data/decor-massy.json, absent = pas de décor). Thème = celui du système.
+let decor = null;
+const sombre = window.matchMedia("(prefers-color-scheme: dark)");
+const PALETTE = {
+  clair:  { fond: "#dfe5e3", sol: [236, 233, 226], vert: [200, 223, 190], eau: [166, 205, 230], bat: [214, 214, 216], quai: [244, 190, 180, 150],
+            petit: [255, 255, 255], moyen: [255, 255, 255], grand: [250, 232, 190], pieton: [215, 212, 205], rail: [140, 140, 148] },
+  sombre: { fond: "#161d28", sol: [30, 36, 48], vert: [28, 58, 48], eau: [24, 44, 86], bat: [44, 50, 66], quai: [92, 92, 150, 150],
+            petit: [52, 60, 76], moyen: [62, 70, 88], grand: [86, 90, 108], pieton: [44, 50, 62], rail: [110, 118, 134] },
+};
+const palette = () => PALETTE[sombre.matches ? "sombre" : "clair"];
+function appliquerTheme() {
+  document.getElementById("carte").style.background = decor ? palette().fond : "";
+  document.documentElement.dataset.theme = sombre.matches ? "sombre" : "clair";
+}
+async function chargerDecor() {
+  try {
+    const r = await fetch("/data/decor-massy.json");
+    if (r.ok) { decor = await r.json(); $("source-decor").textContent = decor.source; $("source-decor").hidden = false; }
+  } catch (e) { /* pas de décor : la carte reste sans fond */ }
+  appliquerTheme(); afficher();
+}
+sombre.addEventListener("change", () => { appliquerTheme(); afficher(); });
+
+const LARGEUR_ROUTE = { grand: 12, moyen: 9, petit: 6, pieton: 2.5 };
+function calquesDecor() {
+  const c = palette(), L = [];
+  const poly = (id, data, couleur) => new deck.PolygonLayer({ id, data, getPolygon: d => d, getFillColor: couleur, stroked: false, filled: true });
+  L.push(poly("verts", decor.verts, c.vert), poly("eaux", decor.eaux, c.eau));
+  L.push(new deck.PathLayer({ id: "cours-eau", data: decor.cours_eau, getPath: d => d, getColor: c.eau, widthUnits: "meters", getWidth: 6, widthMinPixels: 1 }));
+  L.push(new deck.PathLayer({ id: "routes", data: decor.routes, getPath: d => d.c, getColor: d => c[d.t], widthUnits: "meters",
+    getWidth: d => LARGEUR_ROUTE[d.t], widthMinPixels: 0.6, capRounded: true, jointRounded: true }));
+  L.push(poly("quais-osm", decor.quais, c.quai));
+  L.push(new deck.PathLayer({ id: "rails", data: decor.rails, getPath: d => d, getColor: c.rail, widthUnits: "meters", getWidth: 1.2, widthMinPixels: 0.5 }));
+  L.push(new deck.PolygonLayer({ id: "batiments", data: decor.batiments, getPolygon: d => d.p, extruded: true, getElevation: d => d.h,
+    getFillColor: c.bat, material: { ambient: 0.55, diffuse: 0.6, shininess: 8, specularColor: [60, 64, 80] }, stroked: false }));
+  return L;
+}
+
 function calques(maintenant = performance.now()) {
   const L = [];
   if (!geo) return L;
+  if (decor) L.push(...calquesDecor());
   L.push(new deck.PathLayer({
     id: "trace", data: geo.trace, getPath: d => d, getColor: [120, 132, 142], widthUnits: "meters", getWidth: 5,
     widthMinPixels: 1.5, capRounded: true, jointRounded: true,
@@ -316,6 +355,7 @@ async function demarrer() {
   choix.value = gareChoisie;
   choix.addEventListener("change", () => { gareChoisie = choix.value; dernierePrevision = null; afficherProchains(); actualiserGare(); });
   creerDeck();
+  chargerDecor();
   $("vue-ligne").addEventListener("click", () => aller(boiteLigne()));
   $("vue-massy").addEventListener("click", () => aller({ ...MASSY, zoom: 13.2, pitch: 55, bearing: 0 }));
   $("vue-quai").addEventListener("click", () => aller({ longitude: 2.25877, latitude: 48.72552, zoom: 17.5, pitch: 62, bearing: 30 }));
