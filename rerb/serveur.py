@@ -13,6 +13,7 @@ Bibliothèque standard seulement. Les tests n'appellent jamais le réseau (fauss
 """
 import argparse
 import functools
+import http.client
 import json
 import os
 import sys
@@ -111,6 +112,16 @@ def _gare_suivante(train, gare):
     return ordre[i + 1] if i + 1 < len(ordre) else None
 
 
+def _nom_sur(nom_gare, ref):
+    """Nom lisible d'une gare ; si PRIM envoie une référence absente de notre liste, on garde la référence brute."""
+    if not ref:
+        return None
+    try:
+        return nom_gare(ref)
+    except (KeyError, ValueError):
+        return ref
+
+
 def calculer_trains(releve, maintenant, distance, localiser, nom_gare):
     """Un dict par train du relevé, à l'instant `maintenant`. `localiser(gare, gare_suivante, distance_m)` ->
     (lat, lon, cap en degrés ou None) ; il peut lever une erreur de géométrie : le train reste dans la liste,
@@ -129,8 +140,8 @@ def calculer_trains(releve, maintenant, distance, localiser, nom_gare):
         gare_pertinente = e.gare_suivante or e.gare
         sortie.append({
             "course": ref, "etat": e.etat.value, "motif": motif,
-            "gare": nom_gare(e.gare) if e.gare else None,
-            "gare_suivante": nom_gare(e.gare_suivante) if e.gare_suivante else None,
+            "gare": _nom_sur(nom_gare, e.gare),
+            "gare_suivante": _nom_sur(nom_gare, e.gare_suivante),
             "lat": lat, "lon": lon, "cap": cap,
             "retard_s": retards.get(gare_pertinente) if gare_pertinente else None,
             "perime": e.perime, "reconstruit": e.reconstruit, "repare": e.repare,
@@ -209,7 +220,7 @@ class Releveur:
                 self.derniere_erreur = str(erreur)
                 self.bloque = erreur.statut in STATUTS_CLE_REFUSEE
                 return "erreur"
-            except (KeyError, IndexError, TypeError, ValueError) as erreur:
+            except (KeyError, IndexError, TypeError, ValueError, AttributeError, http.client.HTTPException) as erreur:
                 self.derniere_erreur = f"réponse illisible ({type(erreur).__name__})"
                 return "erreur"
             self.releve = Releve(maintenant, trains)   # une seule affectation : les requêtes lisent une copie cohérente
@@ -232,17 +243,30 @@ def lire_cle(chemin_env, nom="PRIM_API_KEY"):
     raise ValueError(f"{nom} absente de {chemin_env}")
 
 
+class _SansRedirection(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None          # la redirection devient une erreur HTTP 3xx, signalée telle quelle
+
+
+_OUVREUR_SANS_REDIRECTION = urllib.request.build_opener(_SansRedirection)
+TAILLE_MAX_REPONSE = 60_000_000      # octets ; l'estimated-timetable du RER B fait ~1 Mo
+
+
 def appeler_prim(cle, url=URL_PRIM_ET, delai=30):
     """Un appel GET PRIM -> JSON décodé. Le message d'erreur ne contient ni la clé ni les en-têtes."""
     requete = urllib.request.Request(url, headers={"apikey": cle, "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(requete, timeout=delai) as r:
-            return json.loads(r.read())["Siri"]["ServiceDelivery"]
+        # Aucune redirection suivie : l'en-tête `apikey` ne doit jamais partir vers une autre adresse.
+        with _OUVREUR_SANS_REDIRECTION.open(requete, timeout=delai) as r:
+            corps = r.read(TAILLE_MAX_REPONSE + 1)
+            if len(corps) > TAILLE_MAX_REPONSE:
+                raise ErreurPrim("réponse trop grande")
+            return json.loads(corps)["Siri"]["ServiceDelivery"]
     except urllib.error.HTTPError as e:
         raise ErreurPrim(f"HTTP {e.code}", e.code) from None
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
         raise ErreurPrim(f"réseau ({type(e).__name__})") from None
-    except (ValueError, KeyError) as e:
+    except (ValueError, KeyError, TypeError) as e:
         raise ErreurPrim(f"réponse illisible ({type(e).__name__})") from None
 
 

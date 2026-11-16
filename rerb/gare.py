@@ -8,6 +8,7 @@ Décision de Mathis (plan tâche 4 §0.4) : le « prochain train » d'une gare v
 Les heures du cache sont refiltrées à chaque requête : un train parti disparaît sans nouvel appel.
 Bibliothèque standard seulement ; la source (`fetch(gare)`) est injectée, les tests n'appellent jamais le réseau.
 """
+import http.client
 import threading
 from datetime import datetime, timedelta
 
@@ -116,9 +117,9 @@ class ReleveurGares:
                 self._erreur[gare] = str(e)
                 self.bloque = e.statut in STATUTS_CLE_REFUSEE
             statut = "erreur"
-        except ValueError as e:
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError, http.client.HTTPException) as e:
             with self._verrou:
-                self._erreur[gare] = f"réponse illisible ({e})"
+                self._erreur[gare] = f"réponse illisible ({type(e).__name__}: {e})" if not isinstance(e, ValueError) else f"réponse illisible ({e})"
             statut = "erreur"
         else:
             with self._verrou:

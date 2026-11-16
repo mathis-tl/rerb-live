@@ -48,5 +48,32 @@ class TestPageLocale(unittest.TestCase):
         self.assertIn("Position estimée, pas GPS", (WEB / "index.html").read_text(encoding="utf-8"))
 
 
+class TestCodeCarte(unittest.TestCase):
+    """Garde-fous statiques sur carte.js (le JS n'a pas de tests unitaires) : défauts réellement rencontrés."""
+
+    def setUp(self):
+        self.js = (WEB / "carte.js").read_text(encoding="utf-8")
+
+    def test_les_trains_dessines_sont_les_positions_animees(self):
+        corps = self.js.split("function calques(")[1]
+        self.assertIn("placesAffiches(maintenant)", corps)
+        self.assertEqual(self.js.count("placesAffiches("), 2, "définie une fois, utilisée une fois")
+
+    def test_aucune_donnee_prim_brute_dans_du_html(self):
+        # toute valeur de train/gare insérée dans une chaîne HTML passe par esc()
+        for ligne in self.js.splitlines():
+            if "${t." in ligne:
+                for champ in re.findall(r"\$\{(t\.[a-z_]+[^}]*)\}", ligne):
+                    if champ in ("t.etat", "t.course", "t.gare", "t.motif", "t.gare_suivante") or champ.startswith("t.gare "):
+                        self.fail(f"donnée PRIM non échappée : ${{{champ}}} dans : {ligne.strip()[:80]}")
+
+    def test_pas_de_requetes_qui_s_empilent(self):
+        self.assertIn("trainsEnCours", self.js)
+        self.assertIn("gareEnCours", self.js)
+
+    def test_reponse_de_gare_perimee_jetee(self):
+        self.assertIn("demandee !== gareChoisie", self.js)
+
+
 if __name__ == "__main__":
     unittest.main()

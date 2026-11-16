@@ -3,6 +3,7 @@
 Plan : docs/plan-tache-4.md (J3, arrêt S3 : 1 appel / 120 s à la demande, plafond 1 000 par jour).
 Données inventées ; les heures sont en UTC.
 """
+import http.server
 import json
 import math
 import tempfile
@@ -16,7 +17,7 @@ from geometry import NoValidDistance
 from memoire import Memoire
 from position import Etat
 from gare import ReleveurGares
-from serveur import (CSV_GARES, TRACE, ErreurPrim, Plafond, Releve, Releveur, calculer_trains, chaine_demo, charger_geo,
+from serveur import (CSV_GARES, TRACE, ErreurPrim, appeler_prim, Plafond, Releve, Releveur, calculer_trains, chaine_demo, charger_geo,
                      construire_contexte, consolider_livraison, creer_serveur, lire_cle)
 
 T0 = datetime(2026, 11, 16, 10, 0, 0, tzinfo=timezone.utc)
@@ -129,6 +130,14 @@ class TestCalculerTrains(unittest.TestCase):
         self.assertIsNone(t["lat"])
         self.assertIn("position impossible", t["motif"])
 
+    def test_nom_de_gare_inconnu_pas_de_plantage(self):
+        def nom_cassant(ref):
+            raise KeyError(ref)
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]), course("T2", [appel(A, 0, 60), appel(B, 300, 360)]))
+        trains = calculer_trains(r, T0 + timedelta(seconds=180), distance, localiser, nom_cassant)
+        self.assertEqual(len(trains), 2)             # un nom introuvable ne fait pas disparaître les trains
+        self.assertEqual(trains[0]["gare"], A)       # on affiche la référence brute plutôt que de planter
+
     def test_retard_de_la_gare_suivante(self):
         r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360, vise_arr=180, vise_dep=240)]))
         t = calculer_trains(r, T0 + timedelta(seconds=120), distance, localiser, nom)[0]
@@ -225,6 +234,66 @@ class Fausse:
         return r
 
 
+class TestAppelerPrim(unittest.TestCase):
+    """appeler_prim contre un faux serveur LOCAL : la clé ne doit jamais suivre une redirection."""
+
+    def serveur(self, comportement):
+        vus = []
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                vus.append((self.path, self.headers.get("apikey")))
+                comportement(self)
+
+            def log_message(self, *a):
+                pass
+        s = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+        self.addCleanup(s.server_close)
+        self.addCleanup(s.shutdown)
+        return f"http://127.0.0.1:{s.server_address[1]}", vus
+
+    def test_redirection_non_suivie(self):
+        def h(req):
+            req.send_response(302)
+            req.send_header("Location", "/ailleurs")
+            req.end_headers()
+        base, vus = self.serveur(h)
+        with self.assertRaises(ErreurPrim) as cm:
+            appeler_prim("CLE-DE-TEST", base + "/depart")
+        self.assertEqual(cm.exception.statut, 302)
+        self.assertEqual([p for p, _ in vus], ["/depart"])        # /ailleurs n'a jamais reçu la clé
+        self.assertNotIn("CLE-DE-TEST", str(cm.exception))
+
+    def test_reponse_trop_grande_refusee(self):
+        import serveur
+        ancien = serveur.TAILLE_MAX_REPONSE
+        serveur.TAILLE_MAX_REPONSE = 100
+        self.addCleanup(setattr, serveur, "TAILLE_MAX_REPONSE", ancien)
+
+        def h(req):
+            corps = b'{"Siri":{"ServiceDelivery":{"x":"' + b"a" * 500 + b'"}}}'
+            req.send_response(200)
+            req.send_header("Content-Length", str(len(corps)))
+            req.end_headers()
+            req.wfile.write(corps)
+        base, _ = self.serveur(h)
+        with self.assertRaises(ErreurPrim) as cm:
+            appeler_prim("CLE-DE-TEST", base + "/x")
+        self.assertIn("trop grande", str(cm.exception))
+
+    def test_reponse_normale(self):
+        def h(req):
+            corps = b'{"Siri":{"ServiceDelivery":{"ok":1}}}'
+            req.send_response(200)
+            req.send_header("Content-Length", str(len(corps)))
+            req.end_headers()
+            req.wfile.write(corps)
+        base, vus = self.serveur(h)
+        self.assertEqual(appeler_prim("CLE-DE-TEST", base + "/x"), {"ok": 1})
+        self.assertEqual(vus[0][1], "CLE-DE-TEST")
+
+
 class TestReleveur(unittest.TestCase):
     def setUp(self):
         self.dossier = tempfile.TemporaryDirectory()
@@ -237,6 +306,14 @@ class TestReleveur(unittest.TestCase):
 
     def liv(self, ref="T1"):
         return livraison(course(ref, [appel(A, 0, 60), appel(B, 300, 360)]))
+
+    def test_exceptions_inattendues_donnent_une_erreur_pas_un_plantage(self):
+        import http.client
+        for exc in (TypeError("x"), AttributeError("x"), http.client.IncompleteRead(b"")):
+            r, _ = self.releveur(Fausse([exc]))
+            self.assertEqual(r.actualiser(T0), "erreur", repr(exc))
+            self.assertIsNotNone(r.derniere_erreur)
+            self.assertFalse(r._verrou.locked())      # le verrou est bien relâché
 
     def test_premier_appel_remplit_le_cache(self):
         f = Fausse([self.liv()])

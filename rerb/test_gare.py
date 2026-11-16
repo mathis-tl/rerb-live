@@ -188,6 +188,21 @@ class TestReleveurGares(unittest.TestCase):
         self.assertEqual(r.passages("2", T0 + timedelta(hours=1))["statut"], "bloqué")
         self.assertEqual(len(f.appels), 1)
 
+    def test_exceptions_inattendues_ne_plantent_pas(self):
+        import http.client
+        for exc in (TypeError("x"), AttributeError("x"), http.client.IncompleteRead(b"")):
+            r, _ = self.releveur(Fausse([exc]))
+            res = r.passages("1", T0)
+            self.assertEqual(res["statut"], "erreur", repr(exc))
+            self.assertEqual(res["passages"], [])
+            self.assertEqual(r.passages("1", T0 + timedelta(seconds=1))["statut"], "cache")   # pas de rafale d'appels
+
+    def test_heure_sans_fuseau_ne_plante_pas(self):
+        v = visite("X", 100, 110)
+        v["MonitoredVehicleJourney"]["MonitoredCall"]["ExpectedDepartureTime"] = "2026-11-16T10:05:00"   # sans Z
+        r, _ = self.releveur(Fausse([reponse(v)]))
+        self.assertEqual(r.passages("1", T0)["statut"], "erreur")
+
     def test_reponse_illisible_est_une_erreur(self):
         r, _ = self.releveur(Fausse([{"pas": "siri"}]))
         res = r.passages("1", T0)

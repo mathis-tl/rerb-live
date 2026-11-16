@@ -170,8 +170,8 @@ function calques(maintenant = performance.now()) {
     getPixelOffset: [8, -8], getTextAnchor: "start", getColor: [29, 42, 51], characterSet: "auto", fontFamily: "system-ui, sans-serif",
     visible: zoom >= 11.5, background: false, outlineWidth: 3, outlineColor: [255, 253, 248, 230], fontSettings: { sdf: true },
   }));
-  const p = placés();
-    if (mode !== "train" && rayon > 0) {
+  const p = placesAffiches(maintenant);
+  if (mode !== "train" && rayon > 0) {
     L.push(new deck.ScatterplotLayer({
       id: "zone", data: p, getPosition: d => [d.lon, d.lat], getRadius: rayon, radiusUnits: "meters", filled: true, stroked: true,
       getFillColor: [214, 158, 46, 55], getLineColor: [183, 121, 31, 200], lineWidthMinPixels: 1.5,
@@ -248,14 +248,16 @@ function boiteLigne() {
 
 // --- Panneau
 const $ = id => document.getElementById(id);
+// Toute donnée venue de PRIM (références de course, gares, motifs) est échappée avant d'entrer dans du HTML.
+const esc = x => String(x == null ? "" : x).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 function minutes(s) { return s == null ? "inconnu" : (s >= 0 ? "+" : "−") + Math.round(Math.abs(s) / 60) + " min"; }
 
 function detail_train() {
   const t = trains.find(x => x.course === selection);
   $("detail").innerHTML = t
-    ? `<b>${t.etat}${t.perime ? " (périmé)" : ""}</b><br>Gare : ${t.gare || "—"}${t.gare_suivante ? "<br>Prochaine gare : " + t.gare_suivante : ""}`
+    ? `<b>${esc(t.etat)}${t.perime ? " (périmé)" : ""}</b><br>Gare : ${esc(t.gare || "—")}${t.gare_suivante ? "<br>Prochaine gare : " + esc(t.gare_suivante) : ""}`
       + `<br>Retard : ${minutes(t.retard_s)}<br>Mise à jour du train il y a ${t.age_s == null ? "?" : Math.round(t.age_s / 60)} min`
-      + (t.reconstruit ? "<br><i>heures reconstruites (gare retirée par PRIM)</i>" : "") + `<br><span class="note">${t.course}</span>`
+      + (t.reconstruit ? "<br><i>heures reconstruites (gare retirée par PRIM)</i>" : "") + `<br><span class="note">${esc(t.course)}</span>`
     : "Clique sur un train.";
 }
 
@@ -276,7 +278,7 @@ function panneau() {
     + `${p.filter(t => t.perime).length} périmés), ${n("non placé")} non placés, ${n("terminé")} terminés, ${n("position inconnue")} position inconnue.`;
   const speciaux = trains.filter(t => t.lat == null && t.etat !== "terminé");
   $("liste-speciaux").innerHTML = speciaux.slice(0, 12).map(t =>
-    `<div class="special"><b>${t.etat}</b> <span class="motif">${t.motif || ""}</span><br><span class="note">${t.course}</span></div>`).join("")
+    `<div class="special"><b>${esc(t.etat)}</b> <span class="motif">${esc(t.motif)}</span><br><span class="note">${esc(t.course)}</span></div>`).join("")
     + (speciaux.length > 12 ? `<div class="note">… et ${speciaux.length - 12} autres</div>` : "");
 }
 
@@ -318,25 +320,39 @@ function afficherProchains() {
   ecrire(corps, ...lignes);
 }
 
+let sequenceGare = 0, gareEnCours = false;
 async function actualiserGare() {
+  if (gareEnCours) return;                        // pas d'empilement si le serveur est lent
+  gareEnCours = true;
+  const demandee = gareChoisie, numero = ++sequenceGare;
+  let reponse;
   try {
-    const r = await fetch("/gare?ref=" + encodeURIComponent(gareChoisie), { cache: "no-store" });
-    dernierePrevision = r.ok ? await r.json() : { passages: [], statut: "erreur", erreur: "serveur HTTP " + r.status, age_s: null };
+    const r = await fetch("/gare?ref=" + encodeURIComponent(demandee), { cache: "no-store" });
+    reponse = r.ok ? await r.json() : { passages: [], statut: "erreur", erreur: "serveur HTTP " + r.status, age_s: null };
   } catch (e) {
-    dernierePrevision = { passages: [], statut: "erreur", erreur: "serveur local injoignable", age_s: null };
+    reponse = { passages: [], statut: "erreur", erreur: "serveur local injoignable", age_s: null };
   }
+  gareEnCours = false;
+  if (demandee !== gareChoisie || numero !== sequenceGare) { actualiserGare(); return; }   // la gare a changé pendant l'appel : réponse jetée
+  dernierePrevision = reponse;
   afficherProchains();
 }
 
+let trainsEnCours = false;
 async function actualiser() {
+  if (trainsEnCours) return;                      // pas d'empilement : une seule requête /trains à la fois
+  trainsEnCours = true;
   try {
     const r = await fetch("/trains", { cache: "no-store" });
     const d = await r.json();
+    if (!Array.isArray(d.trains)) throw new Error("réponse invalide");
     statut = d; trains = d.trains; majAffiches(performance.now());
+    if (selection && !trains.some(t => t.course === selection)) selection = null;   // le train choisi a disparu
   } catch (e) {
     statut = { ...(statut || {}), erreur: "serveur local injoignable", bloque: false, plafond: (statut && statut.plafond) || { utilises: "?", maximum: "?" } };
   }
-  panneau(); detail_train(); afficher(); animer();
+  trainsEnCours = false;
+  panneau(); detail_train(); afficherProchains(); afficher(); animer();
 }
 
 async function demarrer() {
@@ -347,13 +363,21 @@ async function demarrer() {
   const fixer = v => { rayon = +v; r.value = v; $("valeur-rayon").textContent = rayon + " m"; afficher(); };
   r.addEventListener("input", () => fixer(r.value));
   document.querySelectorAll("[data-rayon]").forEach(b => b.addEventListener("click", () => fixer(b.dataset.rayon)));
-  geo = await (await fetch("/geo")).json();
+  try {
+    const rg = await fetch("/geo");
+    if (!rg.ok) throw new Error("HTTP " + rg.status);
+    geo = await rg.json();
+  } catch (e) {
+    const b = $("bandeau-erreur"); b.hidden = false;
+    b.textContent = "Impossible de charger le tracé (" + e.message + "). Le serveur local tourne-t-il ? Recharge la page.";
+    return;
+  }
   const choix = $("choix-gare");
   [...geo.gares].sort((a, b) => a.nom.localeCompare(b.nom, "fr")).forEach(g => {
     const o = noeud("option", g.nom); o.value = g.ref; choix.append(o);
   });
   choix.value = gareChoisie;
-  choix.addEventListener("change", () => { gareChoisie = choix.value; dernierePrevision = null; afficherProchains(); actualiserGare(); });
+  choix.addEventListener("change", () => { gareChoisie = choix.value; dernierePrevision = null; sequenceGare++; afficherProchains(); actualiserGare(); });
   creerDeck();
   chargerDecor();
   $("vue-ligne").addEventListener("click", () => aller(boiteLigne()));
