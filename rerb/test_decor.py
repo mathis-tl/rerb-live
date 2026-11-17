@@ -18,20 +18,31 @@ def way(tags, g):
 
 
 class TestHauteur(unittest.TestCase):
+    """hauteur_m -> (hauteur en mètres, h_src) ; h_src = osm | etages | defaut (ign réservé, non produit ici)."""
+
     def test_height_explicite(self):
-        self.assertEqual(hauteur_m({"height": "12.5"}), (12.5, True))
-        self.assertEqual(hauteur_m({"height": "12 m"}), (12.0, True))
+        self.assertEqual(hauteur_m({"height": "12.5"}), (12.5, "osm"))
+        self.assertEqual(hauteur_m({"height": "12 m"}), (12.0, "osm"))
 
     def test_niveaux(self):
-        self.assertEqual(hauteur_m({"building:levels": "4"}), (12.0, True))
+        self.assertEqual(hauteur_m({"building:levels": "4"}), (12.0, "etages"))
+
+    def test_height_prioritaire_sur_niveaux(self):
+        self.assertEqual(hauteur_m({"height": "20", "building:levels": "4"}), (20.0, "osm"))
+
+    def test_height_absurde_retombe_sur_niveaux(self):
+        self.assertEqual(hauteur_m({"height": "9999", "building:levels": "2"}), (6.0, "etages"))
+        self.assertEqual(hauteur_m({"height": "grand", "building:levels": "5"}), (15.0, "etages"))
 
     def test_defaut_et_marquage(self):
-        self.assertEqual(hauteur_m({}), (HAUTEUR_DEFAUT_M, False))
-        self.assertEqual(hauteur_m({"height": "grand"}), (HAUTEUR_DEFAUT_M, False))
+        self.assertEqual(hauteur_m({}), (HAUTEUR_DEFAUT_M, "defaut"))
+        self.assertEqual(hauteur_m({"height": "grand"}), (HAUTEUR_DEFAUT_M, "defaut"))
 
     def test_valeurs_absurdes_ignorees(self):
-        self.assertEqual(hauteur_m({"height": "-3"}), (HAUTEUR_DEFAUT_M, False))
-        self.assertEqual(hauteur_m({"height": "9999"}), (HAUTEUR_DEFAUT_M, False))
+        self.assertEqual(hauteur_m({"height": "-3"}), (HAUTEUR_DEFAUT_M, "defaut"))
+        self.assertEqual(hauteur_m({"height": "9999"}), (HAUTEUR_DEFAUT_M, "defaut"))
+        self.assertEqual(hauteur_m({"building:levels": "0"}), (HAUTEUR_DEFAUT_M, "defaut"))
+        self.assertEqual(hauteur_m({"building:levels": "999"}), (HAUTEUR_DEFAUT_M, "defaut"))
 
 
 class TestClasses(unittest.TestCase):
@@ -52,8 +63,18 @@ class TestConvertir(unittest.TestCase):
         self.assertEqual(c["batiments_hauteur_par_defaut"], 0)
 
     def test_hauteur_par_defaut_comptee(self):
-        _, c = convertir({"elements": [way({"building": "yes"}, CARRE)]})
+        d, c = convertir({"elements": [way({"building": "yes"}, CARRE)]})
         self.assertEqual(c["batiments_hauteur_par_defaut"], 1)
+        self.assertEqual(d["batiments"][0]["h_src"], "defaut")
+
+    def test_h_src_et_repartition(self):
+        d, c = convertir({"elements": [way({"building": "yes", "height": "20"}, CARRE),
+                                       way({"building": "yes", "building:levels": "3"}, CARRE),
+                                       way({"building": "yes"}, CARRE), way({"building": "yes"}, CARRE)]})
+        self.assertEqual([b["h_src"] for b in d["batiments"]], ["osm", "etages", "defaut", "defaut"])
+        self.assertEqual([b["h"] for b in d["batiments"]], [20.0, 9.0, 9.0, 9.0])
+        self.assertEqual((c["h_src_osm"], c["h_src_etages"], c["h_src_defaut"], c["h_src_ign"]), (1, 1, 2, 0))
+        self.assertEqual(c["batiments_hauteur_par_defaut"], 2)
 
     def test_batiment_non_ferme_ecarte_et_compte(self):
         d, c = convertir({"elements": [way({"building": "yes"}, LIGNE)]})

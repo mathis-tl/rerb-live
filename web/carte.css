@@ -21,6 +21,10 @@ input[type=range] { width: 100%; }
 #legende b { display: block; margin-bottom: 3px; }
 .pastille { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin: 0 4px 0 8px; vertical-align: -1px; }
 .pastille.zone { background: rgba(214, 158, 46, .5); border: 1px solid #b7791f; }
+#legende-hauteurs { display: block; font-size: 12px; margin-top: 3px; }
+.pastille.carre { border-radius: 2px; border: 1px solid #9a9aa0; }
+.pastille.bat-mesure { background: rgb(214, 214, 216); }
+.pastille.bat-defaut { background: rgb(222, 204, 176); }
 select { font: inherit; width: 100%; padding: 4px 6px; margin-bottom: 4px; }
 #prochains { width: 100%; border-collapse: collapse; font-size: 13px; }
 #prochains td { padding: 3px 4px; border-bottom: 1px solid #eee; vertical-align: top; }

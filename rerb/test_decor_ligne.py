@@ -116,6 +116,12 @@ class TestCellules(unittest.TestCase):
         self.assertEqual(sum(len(c["routes"]) for c in cells.values()), 1)
         self.assertEqual(len(cells), 2)       # la route commence dans la cellule du 1er bâtiment
 
+    def test_decoupage_conserve_h_src(self):
+        decor = {"batiments": [{"p": [[2.0, 48.0], [2.001, 48.0], [2.001, 48.001], [2.0, 48.0]], "h": 9.0, "h_src": "defaut"}],
+                 "routes": [], "rails": [], "quais": [], "verts": [], "eaux": [], "cours_eau": []}
+        (cellule,) = decouper_cellules(decor, 0.02).values()
+        self.assertEqual(cellule["batiments"][0]["h_src"], "defaut")
+
     def test_cellules_vides_non_ecrites(self):
         cells = decouper_cellules({"batiments": [], "routes": [], "rails": [], "quais": [], "verts": [], "eaux": [], "cours_eau": []}, 0.02)
         self.assertEqual(cells, {})

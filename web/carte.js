@@ -119,9 +119,9 @@ function animer() {
 let decor = null;
 const sombre = window.matchMedia("(prefers-color-scheme: dark)");
 const PALETTE = {
-  clair:  { fond: "#dfe5e3", sol: [236, 233, 226], vert: [200, 223, 190], eau: [166, 205, 230], bat: [214, 214, 216], quai: [244, 190, 180, 150],
+  clair:  { fond: "#dfe5e3", sol: [236, 233, 226], vert: [200, 223, 190], eau: [166, 205, 230], bat: [214, 214, 216], bat_defaut: [222, 204, 176], quai: [244, 190, 180, 150],
             petit: [255, 255, 255], moyen: [255, 255, 255], grand: [250, 232, 190], pieton: [215, 212, 205], rail: [140, 140, 148] },
-  sombre: { fond: "#161d28", sol: [30, 36, 48], vert: [28, 58, 48], eau: [24, 44, 86], bat: [44, 50, 66], quai: [92, 92, 150, 150],
+  sombre: { fond: "#161d28", sol: [30, 36, 48], vert: [28, 58, 48], eau: [24, 44, 86], bat: [44, 50, 66], bat_defaut: [74, 66, 56], quai: [92, 92, 150, 150],
             petit: [52, 60, 76], moyen: [62, 70, 88], grand: [86, 90, 108], pieton: [44, 50, 62], rail: [110, 118, 134] },
 };
 const palette = () => PALETTE[sombre.matches ? "sombre" : "clair"];
@@ -200,7 +200,7 @@ function calquesDecor(decor) {
   L.push(poly("quais-osm", decor.quais, c.quai));
   L.push(new deck.PathLayer({ id: "rails", data: decor.rails, getPath: d => d, getColor: c.rail, widthUnits: "meters", getWidth: 1.2, widthMinPixels: 0.5 }));
   L.push(new deck.PolygonLayer({ id: "batiments", data: decor.batiments, getPolygon: d => d.p, extruded: true, getElevation: d => d.h,
-    getFillColor: c.bat, material: { ambient: 0.55, diffuse: 0.6, shininess: 8, specularColor: [60, 64, 80] }, stroked: false }));
+    getFillColor: d => d.h_src === "defaut" ? c.bat_defaut : c.bat, updateTriggers: { getFillColor: [c.bat_defaut[0], c.bat[0]] }, material: { ambient: 0.55, diffuse: 0.6, shininess: 8, specularColor: [60, 64, 80] }, stroked: false }));
   return L;
 }
 

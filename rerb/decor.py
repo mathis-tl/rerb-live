@@ -2,8 +2,8 @@
 
 Données © contributeurs OpenStreetMap, licence ODbL : attribution affichée dans la carte. Le fichier produit n'est pas versionné
 (`web/data/` est ignoré) ; il se régénère avec `rerb/exploration/fabriquer_decor.py`.
-Choix simples, annoncés : relations = contours extérieurs seulement (pas de cours intérieures) ; bâtiment sans hauteur :
-HAUTEUR_DEFAUT_M, et le nombre de bâtiments concernés est compté ; coordonnées arrondies à 5 décimales (~1 m).
+Choix simples, annoncés : relations = contours extérieurs seulement (pas de cours intérieures) ; bâtiment : champ h_src (osm, etages, defaut ; ign réservé),
+sans hauteur : HAUTEUR_DEFAUT_M, et le nombre de bâtiments concernés est compté ; coordonnées arrondies à 5 décimales (~1 m).
 Bibliothèque standard seulement.
 """
 import re
@@ -30,15 +30,21 @@ def _nombre(texte):
     return float(m.group(1).replace(",", ".")) if m else None
 
 
+def _plausible(h):
+    return h is not None and 0 < h <= HAUTEUR_MAX_M
+
+
 def hauteur_m(tags):
-    """-> (hauteur en mètres, True si elle vient d'OSM, False si valeur par défaut)."""
+    """-> (hauteur en mètres, h_src). Priorité : height OSM (« osm »), puis building:levels × 3 m (« etages »),
+    puis HAUTEUR_DEFAUT_M (« defaut »). Une height absurde est ignorée et on essaie les étages.
+    La valeur « ign » est réservée (étape 2, croisement BD TOPO) : jamais produite ici."""
     h = _nombre(tags["height"]) if "height" in tags else None
-    if h is None and "building:levels" in tags:
-        n = _nombre(tags["building:levels"])
-        h = n * METRES_PAR_NIVEAU if n is not None else None
-    if h is None or not 0 < h <= HAUTEUR_MAX_M:
-        return HAUTEUR_DEFAUT_M, False
-    return h, True
+    if _plausible(h):
+        return h, "osm"
+    n = _nombre(tags["building:levels"]) if "building:levels" in tags else None
+    if n is not None and _plausible(n * METRES_PAR_NIVEAU):
+        return n * METRES_PAR_NIVEAU, "etages"
+    return HAUTEUR_DEFAUT_M, "defaut"
 
 
 def _pts(geometrie):
@@ -56,7 +62,8 @@ def convertir(overpass):
     except (KeyError, TypeError):
         raise ValueError("extrait OSM illisible") from None
     d = {k: [] for k in ("batiments", "routes", "rails", "quais", "verts", "eaux", "cours_eau")}
-    c = {"batiments": 0, "batiments_hauteur_par_defaut": 0, "ecartes_non_fermes": 0, "ecartes_sans_geometrie": 0}
+    c = {"batiments": 0, "batiments_hauteur_par_defaut": 0,
+         "h_src_osm": 0, "h_src_ign": 0, "h_src_etages": 0, "h_src_defaut": 0, "ecartes_non_fermes": 0, "ecartes_sans_geometrie": 0}
     for e in elements:
         t = e.get("tags") or {}
         if e.get("type") == "relation":
@@ -67,15 +74,16 @@ def convertir(overpass):
             c["ecartes_sans_geometrie"] += 1
             continue
         if "building" in t:
-            h, vient_osm = hauteur_m(t)
+            h, h_src = hauteur_m(t)
             for g in contours:
                 p = _pts(g)
                 if not _ferme(p):
                     c["ecartes_non_fermes"] += 1
                     continue
-                d["batiments"].append({"p": p, "h": h})
+                d["batiments"].append({"p": p, "h": h, "h_src": h_src})
                 c["batiments"] += 1
-                c["batiments_hauteur_par_defaut"] += 0 if vient_osm else 1
+                c["h_src_" + h_src] += 1
+                c["batiments_hauteur_par_defaut"] += h_src == "defaut"
             continue
         g = _pts(contours[0])
         if "highway" in t:

@@ -21,5 +21,6 @@ for cle, contenu in cellules.items():
     f = dossier / f"{cle}.json"
     f.write_text(json.dumps(contenu, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
     total += f.stat().st_size
-(dossier / "index.json").write_text(json.dumps({"taille_deg": TAILLE, "cellules": sorted(cellules), "source": "© contributeurs OpenStreetMap, licence ODbL"}), encoding="utf-8")
+(dossier / "index.json").write_text(json.dumps({"taille_deg": TAILLE, "cellules": sorted(cellules), "source": "© contributeurs OpenStreetMap, licence ODbL",
+                                                                      "h_src": {k[6:]: v for k, v in comptes.items() if k.startswith("h_src_")}}), encoding="utf-8")
 print(comptes, f"{len(cellules)} cellules, {total / 1e6:.1f} Mo")

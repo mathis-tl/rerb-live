@@ -71,6 +71,14 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("trainsEnCours", self.js)
         self.assertIn("gareEnCours", self.js)
 
+    def test_batiments_a_hauteur_par_defaut_ont_une_teinte_et_une_legende(self):
+        self.assertIn('h_src === "defaut"', self.js)
+        self.assertIn("bat_defaut", self.js)
+        self.assertIn("updateTriggers", self.js)
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="legende-hauteurs"', html)
+        self.assertIn("hauteur par défaut", html)
+
     def test_reponse_de_gare_perimee_jetee(self):
         self.assertIn("demandee !== gareChoisie", self.js)
 
