@@ -26,6 +26,7 @@ from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from duree_troncon import fournisseur_duree_min
 from gare import ReleveurGares
 from geometry import Geometry, load_morceaux, point_a_distance
 from memoire import Memoire
@@ -112,7 +113,8 @@ def _gare_suivante(train, gare):
     return ordre[i + 1] if i + 1 < len(ordre) else None
 
 
-VITESSE_MAX_MS = 33.0   # 119 km/h : vitesse maximale du RER B (120 km/h) ; au-delà, les horaires PRIM sont impossibles
+VITESSE_MAX_MS = 33.0   # 119 km/h : vitesse maximale du RER B (120 km/h) ; plancher de durée (distance / 33) et repli si tronçon inconnu
+TABLE_DUREES = RACINE / "rerb" / "donnees" / "duree_min_troncon.json"   # T1 : durée minimale plausible par tronçon (correction estimée)
 
 
 def _nom_sur(nom_gare, ref):
@@ -125,24 +127,38 @@ def _nom_sur(nom_gare, ref):
         return ref
 
 
-def calculer_trains(releve, maintenant, distance, localiser, nom_gare):
+def calculer_trains(releve, maintenant, distance, localiser, nom_gare, duree_min=None):
     """Un dict par train du relevé, à l'instant `maintenant`. `localiser(gare, gare_suivante, distance_m)` ->
     (lat, lon, cap en degrés ou None) ; il peut lever une erreur de géométrie : le train reste dans la liste,
-    sans position, avec son motif. À quai, `gare_suivante` donne l'orientation de la rame (None au terminus)."""
+    sans position, avec son motif. À quai, `gare_suivante` donne l'orientation de la rame (None au terminus).
+    `duree_min(ref_gare, ref_gare_suivante)` -> (secondes, source) ou None (tronçon inconnu) : durée minimale plausible du
+    tronçon (T1, correction estimée). Jamais sous le plancher distance / VITESSE_MAX_MS, qui sert aussi de repli."""
     sortie = []
     for ref, (train, retards) in releve.trains.items():
         e = estimer(train, maintenant, distance)
         lat = lon = cap = None
         motif = e.motif
         distance_m, vitesse, incoherent, motif_vitesse = e.distance_m, None, False, None
+        corrige, minimum_s, source_min = False, None, None
         if e.etat == Etat.EN_ROUTE and e.duree_s and e.longueur_m is not None:
             vitesse = e.longueur_m / e.duree_s
-            if vitesse > VITESSE_MAX_MS:
-                # Horaires impossibles (ex. 1 000 m en 12 s) : on n'affiche jamais plus de VITESSE_MAX_MS depuis le départ.
+            plancher_s = e.longueur_m / VITESSE_MAX_MS
+            minimum_s, source_min = plancher_s, "plancher"
+            estimee = duree_min(e.gare, e.gare_suivante) if duree_min else None
+            if estimee and estimee[0] > plancher_s:
+                minimum_s, source_min = estimee[0], estimee[1]
+            if e.duree_s < minimum_s:
+                # Durée annoncée impossible (ex. 1 435 m en 60 s) : le train est supposé mettre `minimum_s` (durée minimale
+                # plausible du tronçon, sinon plancher 33 m/s) ; il n'avance jamais plus vite que cela depuis son départ.
                 incoherent = True
-                distance_m = min(e.distance_m, VITESSE_MAX_MS * e.fraction * e.duree_s)
-                motif_vitesse = (f"horaires incohérents : {e.longueur_m:.0f} m en {e.duree_s:.0f} s "
-                                 f"({vitesse * 3.6:.0f} km/h) ; vitesse affichée limitée à {VITESSE_MAX_MS * 3.6:.0f} km/h")
+                corrige = source_min == "estimée"
+                distance_m = min(e.distance_m, e.longueur_m * (e.fraction * e.duree_s) / minimum_s)
+                if corrige:
+                    motif_vitesse = (f"horaires incohérents : {e.longueur_m:.0f} m en {e.duree_s:.0f} s ({vitesse * 3.6:.0f} km/h) ; "
+                                     f"correction estimée : durée minimale plausible de ce tronçon {minimum_s:.0f} s, mesurée sur des relevés passés")
+                else:
+                    motif_vitesse = (f"horaires incohérents : {e.longueur_m:.0f} m en {e.duree_s:.0f} s "
+                                     f"({vitesse * 3.6:.0f} km/h) ; vitesse affichée limitée à {VITESSE_MAX_MS * 3.6:.0f} km/h")
         if e.etat in (Etat.A_QUAI, Etat.EN_ROUTE):
             suivante = e.gare_suivante if e.etat == Etat.EN_ROUTE else _gare_suivante(train, e.gare)
             try:
@@ -153,6 +169,7 @@ def calculer_trains(releve, maintenant, distance, localiser, nom_gare):
         sortie.append({
             "course": ref, "etat": e.etat.value, "motif": motif,
             "horaires_incoherents": incoherent, "vitesse_implicite_ms": vitesse, "motif_vitesse": motif_vitesse,
+            "correction_estimee": corrige, "duree_min_s": minimum_s, "source_duree_min": source_min,
             "gare": _nom_sur(nom_gare, e.gare),
             "gare_suivante": _nom_sur(nom_gare, e.gare_suivante),
             "lat": lat, "lon": lon, "cap": cap,
@@ -302,7 +319,7 @@ def fichier_statique(racine, chemin_url):
 
 
 def creer_serveur(releveur, distance, localiser, nom_gare, port=8765, horloge=None, racine_web=None, geo=None,
-                  demo=False, releveur_gares=None, gares=None):
+                  demo=False, releveur_gares=None, gares=None, duree_min=None):
     """Serveur HTTP sur 127.0.0.1 seulement. `horloge()` -> instant UTC (remplaçable en test).
     Routes : /trains, /statut, /geo (tracé et gares), fichiers de `racine_web` (défaut : web/). Le reste : 404.
     /gare?ref=<numéro> : prochains trains d'une gare (stop-monitoring), seulement si `releveur_gares` et `gares`
@@ -321,7 +338,7 @@ def creer_serveur(releveur, distance, localiser, nom_gare, port=8765, horloge=No
             "releve_age_s": int((maintenant - r.recu).total_seconds()) if r else None,
             "erreur": releveur.derniere_erreur, "bloque": releveur.bloque,
             "plafond": {"utilises": releveur.plafond.utilises, "maximum": releveur.plafond.maximum},
-            "trains": calculer_trains(r, maintenant, distance, localiser, nom_gare) if r else [],
+            "trains": calculer_trains(r, maintenant, distance, localiser, nom_gare, duree_min) if r else [],
         }
 
     class Gestionnaire(BaseHTTPRequestHandler):
@@ -472,7 +489,7 @@ def main(argv=None):
                    f"prochains trains : 1 appel par gare au plus toutes les 60 s (plafond {a.plafond_gares} par jour)")
     noms = {n: g.name for n, g in _charger(CSV_GARES, TRACE)[0].items()}
     serveur = creer_serveur(releveur, distance, localiser, nom_gare, a.port, geo=charger_geo(), demo=a.demo,
-                            releveur_gares=releveur_gares, gares=noms)
+                            releveur_gares=releveur_gares, gares=noms, duree_min=fournisseur_duree_min(TABLE_DUREES))
     print(f"carte sur http://127.0.0.1:{serveur.server_address[1]}/  ({message})", flush=True)
     try:
         serveur.serve_forever()

@@ -159,10 +159,47 @@ class TestCalculerTrains(unittest.TestCase):
         t = calculer_trains(r, T0 + timedelta(seconds=65), distance, localiser, nom)[0]
         self.assertFalse(t["horaires_incoherents"])
 
+    def test_duree_min_estimee_remplace_la_limite_unique(self):
+        # 1 000 m en 60 s = 16,7 m/s : plausible pour la limite unique, mais la durée minimale estimée du tronçon est 120 s.
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 120, 180)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=90), distance, localiser, nom,
+                            duree_min=lambda a, b: (120.0, "estimée"))[0]
+        self.assertTrue(t["horaires_incoherents"])
+        self.assertTrue(t["correction_estimee"])
+        self.assertEqual(t["duree_min_s"], 120.0)
+        self.assertEqual(t["source_duree_min"], "estimée")
+        self.assertAlmostEqual(t["lat"], 48 + 0.25)                  # 30 s écoulées sur 120 s plausibles : 250 m (au lieu de 500 m)
+        self.assertIn("correction estimée", t["motif_vitesse"])
+
+    def test_duree_annoncee_au_dessus_du_minimum_non_modifiee(self):
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 180, 240)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=90), distance, localiser, nom,
+                            duree_min=lambda a, b: (120.0, "estimée"))[0]
+        self.assertFalse(t["horaires_incoherents"])
+        self.assertFalse(t["correction_estimee"])
+        self.assertAlmostEqual(t["lat"], 48.25)                      # 30 s sur 120 s annoncées : 250 m, inchangé
+
+    def test_troncon_inconnu_repli_plancher_33_ms(self):
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 70, 130)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=65), distance, localiser, nom, duree_min=lambda a, b: None)[0]
+        self.assertTrue(t["horaires_incoherents"])
+        self.assertAlmostEqual(t["lat"], 48 + 165.0 / 1000.0)        # comme avant : 33 m/s x 5 s
+        self.assertEqual(t["source_duree_min"], "plancher")
+        self.assertAlmostEqual(t["duree_min_s"], 1000 / 33.0)
+
+    def test_duree_min_jamais_sous_le_plancher(self):
+        # une table fautive qui donnerait 10 s pour 1 000 m ne doit pas relâcher la limite de 33 m/s
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 70, 130)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=65), distance, localiser, nom,
+                            duree_min=lambda a, b: (10.0, "estimée"))[0]
+        self.assertAlmostEqual(t["duree_min_s"], 1000 / 33.0)
+        self.assertAlmostEqual(t["lat"], 48 + 165.0 / 1000.0)
+
     def test_a_quai_pas_de_vitesse(self):
         r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
         t = calculer_trains(r, T0 + timedelta(seconds=30), distance, localiser, nom)[0]
         self.assertFalse(t["horaires_incoherents"])
+        self.assertFalse(t["correction_estimee"])
         self.assertIsNone(t["vitesse_implicite_ms"])
 
     def test_retard_de_la_gare_suivante(self):
