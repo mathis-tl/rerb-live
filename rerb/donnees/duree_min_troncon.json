@@ -1,5 +1,5 @@
 {
- "méthode": "max(plancher 33 m/s, centile 10 des durées observées valides) si au moins 5 observations, sinon plancher ; correction estimée",
+ "méthode": "max(plancher 33 m/s, centile 10 des durées observées valides) si au moins 5 observations, sinon plancher ; plancher aussi si plus de 30% des observations sont impossibles ; correction estimée",
  "relevés": 96809,
  "observations": 6647,
  "troncons": {
@@ -7,277 +7,323 @@
    "duree_min_s": 42.8,
    "source": "estimée",
    "n": 80,
-   "distance_m": 1357.0
+   "distance_m": 1357.0,
+   "part_impossibles": 0.184
   },
   "43066|46007": {
    "duree_min_s": 32.5,
    "source": "estimée",
    "n": 128,
-   "distance_m": 824.8
+   "distance_m": 824.8,
+   "part_impossibles": 0.281
   },
   "43067|43607": {
    "duree_min_s": 38.2,
    "source": "estimée",
    "n": 186,
-   "distance_m": 1206.1
+   "distance_m": 1206.1,
+   "part_impossibles": 0.162
   },
   "43067|44493": {
-   "duree_min_s": 35.3,
-   "source": "estimée",
+   "duree_min_s": 25.1,
+   "source": "plancher",
    "n": 114,
-   "distance_m": 828.3
+   "distance_m": 828.3,
+   "part_impossibles": 0.415
   },
   "43071|43193": {
-   "duree_min_s": 118.1,
-   "source": "estimée",
+   "duree_min_s": 99.1,
+   "source": "plancher",
    "n": 57,
-   "distance_m": 3271.2
+   "distance_m": 3271.2,
+   "part_impossibles": 0.525
   },
   "43071|43194": {
    "duree_min_s": 113.4,
    "source": "estimée",
    "n": 93,
-   "distance_m": 2996.3
+   "distance_m": 2996.3,
+   "part_impossibles": 0.155
   },
   "43071|46163": {
-   "duree_min_s": 53.3,
-   "source": "estimée",
+   "duree_min_s": 44.7,
+   "source": "plancher",
    "n": 129,
-   "distance_m": 1476.4
+   "distance_m": 1476.4,
+   "part_impossibles": 0.453
   },
   "43086|43103": {
-   "duree_min_s": 45.7,
-   "source": "estimée",
+   "duree_min_s": 37.6,
+   "source": "plancher",
    "n": 40,
-   "distance_m": 1239.5
+   "distance_m": 1239.5,
+   "part_impossibles": 0.344
   },
   "43086|43232": {
    "duree_min_s": 45.6,
    "source": "estimée",
    "n": 80,
-   "distance_m": 1324.3
+   "distance_m": 1324.3,
+   "part_impossibles": 0.158
   },
   "43097|43177": {
-   "duree_min_s": 59.3,
-   "source": "estimée",
+   "duree_min_s": 36.5,
+   "source": "plancher",
    "n": 57,
-   "distance_m": 1203.6
+   "distance_m": 1203.6,
+   "part_impossibles": 0.418
   },
   "43097|44493": {
    "duree_min_s": 66.0,
    "source": "estimée",
    "n": 211,
-   "distance_m": 1756.8
+   "distance_m": 1756.8,
+   "part_impossibles": 0.05
   },
   "43097|59206": {
    "duree_min_s": 40.4,
    "source": "estimée",
    "n": 75,
-   "distance_m": 1135.1
+   "distance_m": 1135.1,
+   "part_impossibles": 0.202
   },
   "43103|47046": {
    "duree_min_s": 42.2,
    "source": "estimée",
    "n": 73,
-   "distance_m": 1047.8
+   "distance_m": 1047.8,
+   "part_impossibles": 0.131
   },
   "43122|43231": {
    "duree_min_s": 89.0,
    "source": "estimée",
    "n": 189,
-   "distance_m": 2148.0
+   "distance_m": 2148.0,
+   "part_impossibles": 0.229
   },
   "43122|46163": {
    "duree_min_s": 56.4,
    "source": "estimée",
    "n": 210,
-   "distance_m": 1498.6
+   "distance_m": 1498.6,
+   "part_impossibles": 0.15
   },
   "43124|43228": {
-   "duree_min_s": 21.7,
-   "source": "estimée",
+   "duree_min_s": 20.6,
+   "source": "plancher",
    "n": 51,
-   "distance_m": 680.1
+   "distance_m": 680.1,
+   "part_impossibles": 0.407
   },
   "43125|43186": {
    "duree_min_s": 38.4,
    "source": "plancher",
    "n": 0,
-   "distance_m": 1268.1
+   "distance_m": 1268.1,
+   "part_impossibles": 0.0
   },
   "43125|59206": {
-   "duree_min_s": 36.0,
-   "source": "estimée",
+   "duree_min_s": 26.6,
+   "source": "plancher",
    "n": 55,
-   "distance_m": 876.3
+   "distance_m": 876.3,
+   "part_impossibles": 0.382
   },
   "43140|43145": {
    "duree_min_s": 60.9,
    "source": "estimée",
    "n": 228,
-   "distance_m": 1869.0
+   "distance_m": 1869.0,
+   "part_impossibles": 0.084
   },
   "43140|43231": {
    "duree_min_s": 114.9,
    "source": "estimée",
    "n": 236,
-   "distance_m": 2988.6
+   "distance_m": 2988.6,
+   "part_impossibles": 0.052
   },
   "43145|462394": {
    "duree_min_s": 179.6,
    "source": "estimée",
    "n": 248,
-   "distance_m": 4349.0
+   "distance_m": 4349.0,
+   "part_impossibles": 0.0
   },
   "43164|46725": {
    "duree_min_s": 116.6,
    "source": "plancher",
    "n": 4,
-   "distance_m": 3847.9
+   "distance_m": 3847.9,
+   "part_impossibles": 0.0
   },
   "43175|47009": {
    "duree_min_s": 38.3,
    "source": "estimée",
    "n": 67,
-   "distance_m": 1152.4
+   "distance_m": 1152.4,
+   "part_impossibles": 0.247
   },
   "43175|474069": {
    "duree_min_s": 66.1,
    "source": "estimée",
    "n": 82,
-   "distance_m": 2007.4
+   "distance_m": 2007.4,
+   "part_impossibles": 0.079
   },
   "43177|46007": {
    "duree_min_s": 35.6,
    "source": "estimée",
    "n": 67,
-   "distance_m": 987.7
+   "distance_m": 987.7,
+   "part_impossibles": 0.287
   },
   "43193|58793": {
    "duree_min_s": 72.9,
    "source": "estimée",
    "n": 109,
-   "distance_m": 1964.2
+   "distance_m": 1964.2,
+   "part_impossibles": 0.135
   },
   "43194|46222": {
    "duree_min_s": 86.6,
    "source": "estimée",
    "n": 95,
-   "distance_m": 2427.5
+   "distance_m": 2427.5,
+   "part_impossibles": 0.152
   },
   "43228|47940": {
-   "duree_min_s": 40.8,
-   "source": "estimée",
+   "duree_min_s": 35.6,
+   "source": "plancher",
    "n": 41,
-   "distance_m": 1173.2
+   "distance_m": 1173.2,
+   "part_impossibles": 0.534
   },
   "43232|474069": {
    "duree_min_s": 58.9,
    "source": "estimée",
    "n": 80,
-   "distance_m": 1454.3
+   "distance_m": 1454.3,
+   "part_impossibles": 0.158
   },
   "43607|45877": {
    "duree_min_s": 36.2,
    "source": "estimée",
    "n": 158,
-   "distance_m": 930.0
+   "distance_m": 930.0,
+   "part_impossibles": 0.244
   },
   "43833|44500": {
-   "duree_min_s": 41.7,
-   "source": "estimée",
+   "duree_min_s": 19.1,
+   "source": "plancher",
    "n": 163,
-   "distance_m": 629.2
+   "distance_m": 629.2,
+   "part_impossibles": 0.38
   },
   "43833|44877": {
    "duree_min_s": 32.1,
    "source": "estimée",
    "n": 260,
-   "distance_m": 925.3
+   "distance_m": 925.3,
+   "part_impossibles": 0.113
   },
   "44500|473890": {
    "duree_min_s": 26.7,
    "source": "estimée",
    "n": 262,
-   "distance_m": 849.7
+   "distance_m": 849.7,
+   "part_impossibles": 0.068
   },
   "44877|45102": {
    "duree_min_s": 36.3,
    "source": "estimée",
    "n": 234,
-   "distance_m": 1007.7
+   "distance_m": 1007.7,
+   "part_impossibles": 0.201
   },
   "45102|462394": {
    "duree_min_s": 95.8,
    "source": "estimée",
    "n": 264,
-   "distance_m": 2464.8
+   "distance_m": 2464.8,
+   "part_impossibles": 0.12
   },
   "45877|473843": {
-   "duree_min_s": 42.0,
-   "source": "estimée",
+   "duree_min_s": 22.0,
+   "source": "plancher",
    "n": 129,
-   "distance_m": 724.8
+   "distance_m": 724.8,
+   "part_impossibles": 0.422
   },
   "46222|46725": {
    "duree_min_s": 98.2,
    "source": "estimée",
    "n": 82,
-   "distance_m": 2872.3
+   "distance_m": 2872.3,
+   "part_impossibles": 0.287
   },
   "462398|473364": {
    "duree_min_s": 32.6,
    "source": "plancher",
    "n": 0,
-   "distance_m": 1076.6
+   "distance_m": 1076.6,
+   "part_impossibles": 0.0
   },
   "462398|47878": {
    "duree_min_s": 210.0,
    "source": "estimée",
    "n": 113,
-   "distance_m": 6417.0
+   "distance_m": 6417.0,
+   "part_impossibles": 0.0
   },
   "47009|58774": {
    "duree_min_s": 47.1,
    "source": "estimée",
    "n": 98,
-   "distance_m": 1434.6
+   "distance_m": 1434.6,
+   "part_impossibles": 0.084
   },
   "47046|47888": {
    "duree_min_s": 39.4,
    "source": "estimée",
    "n": 74,
-   "distance_m": 1175.5
+   "distance_m": 1175.5,
+   "part_impossibles": 0.204
   },
   "47052|47888": {
    "duree_min_s": 88.6,
    "source": "plancher",
    "n": 0,
-   "distance_m": 2923.3
+   "distance_m": 2923.3,
+   "part_impossibles": 0.0
   },
   "47052|47889": {
    "duree_min_s": 60.9,
    "source": "plancher",
    "n": 0,
-   "distance_m": 2008.4
+   "distance_m": 2008.4,
+   "part_impossibles": 0.0
   },
   "473843|473890": {
    "duree_min_s": 50.8,
    "source": "estimée",
    "n": 258,
-   "distance_m": 1376.5
+   "distance_m": 1376.5,
+   "part_impossibles": 0.116
   },
   "47878|58793": {
    "duree_min_s": 42.7,
    "source": "estimée",
    "n": 100,
-   "distance_m": 1304.1
+   "distance_m": 1304.1,
+   "part_impossibles": 0.194
   },
   "47940|58774": {
    "duree_min_s": 52.6,
    "source": "estimée",
    "n": 14,
-   "distance_m": 1541.0
+   "distance_m": 1541.0,
+   "part_impossibles": 0.222
   }
  }
 }

@@ -27,6 +27,7 @@ ECART_MAX = timedelta(seconds=45)   # même seuil que J2 bis (relevé /30 s + gi
 N_MIN = 5                           # observations valides minimales pour fier la durée minimale à l'observé
 CENTILE = 10                        # « bas centile »
 FACTEUR_LONG = 1.5                  # observé ou annoncé au-delà de 1,5 × la médiane du tronçon : « long »
+PART_IMPOSSIBLES_MAX = 0.30  # au-delà, observations trop bruitées : minimum neutralisé (retour au plancher)
 DUREE_MAX_S = 900                   # un tronçon de plus de 15 min : arrivée sans rapport avec ce départ
 
 R_TROU = "trou de relevés trop long"
@@ -164,10 +165,15 @@ def table_duree_min(observations, distances, vitesse_ms=PLANCHER_VITESSE_MS, cen
     table = {}
     for cle, d in distances.items():
         plancher = d / vitesse_ms
-        durees = [o.duree_s for o in par_troncon.get(cle, []) if valide(o, plancher)]
-        v, source, n = duree_min_plausible(durees, plancher, centile_p, n_min)
+        toutes = par_troncon.get(cle, [])
+        durees = [o.duree_s for o in toutes if valide(o, plancher)]
+        part = (len(toutes) - len(durees)) / len(toutes) if toutes else 0.0
+        if part > PART_IMPOSSIBLES_MAX:
+            v, source, n = plancher, "plancher", len(durees)  # drapeau trop bruité : on ne corrige pas au-delà du plancher
+        else:
+            v, source, n = duree_min_plausible(durees, plancher, centile_p, n_min)
         table[cle] = {"distance_m": d, "plancher_s": plancher, "duree_min_s": v, "source": source, "n": n,
-                      "mediane_s": centile(durees, 50)}
+                      "mediane_s": centile(durees, 50), "part_impossibles": part}
     return table
 
 

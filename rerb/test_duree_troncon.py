@@ -146,6 +146,23 @@ class TestTable(unittest.TestCase):
     def test_cle_sans_orientation(self):
         self.assertEqual(cle_troncon("2", "1"), cle_troncon("1", "2"))
 
+    def test_trop_d_observations_impossibles_neutralise_le_minimum(self):
+        # plancher 1000/33 = 30,3 s ; 4 impossibles (10 s) + 6 valides = 40 % > 30 % : retour au plancher
+        dist = {cle_troncon("1", "2"): 1000.0}
+        bruitees = [obs(10)] * 4 + [obs(d) for d in (100, 110, 120, 130, 140, 150)]
+        a = table_duree_min(bruitees, dist, vitesse_ms=33.0)[cle_troncon("1", "2")]
+        self.assertEqual(a["source"], "plancher")
+        self.assertAlmostEqual(a["duree_min_s"], 1000 / 33.0)
+        self.assertAlmostEqual(a["part_impossibles"], 0.4)
+
+    def test_part_impossibles_sous_le_seuil_garde_l_estimation(self):
+        # 2 impossibles + 8 valides = 20 % : estimation conservée
+        dist = {cle_troncon("1", "2"): 1000.0}
+        ok = [obs(10)] * 2 + [obs(d) for d in (100, 110, 120, 130, 140, 150, 160, 170)]
+        a = table_duree_min(ok, dist, vitesse_ms=33.0)[cle_troncon("1", "2")]
+        self.assertEqual(a["source"], "estimée")
+        self.assertAlmostEqual(a["part_impossibles"], 0.2)
+
     def test_table(self):
         observations = [obs(d) for d in (100, 110, 120, 130, 140, 150)] + [obs(50, de="2", vers="3")]
         dist = {cle_troncon("1", "2"): 1000.0, cle_troncon("2", "3"): 800.0}

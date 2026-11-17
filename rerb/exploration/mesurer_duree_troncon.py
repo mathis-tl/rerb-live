@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, urlparse
 RACINE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(RACINE / "rerb"))
 
-from duree_troncon import (ECART_MAX, N_MIN, CENTILE, PLANCHER_VITESSE_MS, Observation, apparier_troncons,  # noqa: E402
+from duree_troncon import (ECART_MAX, N_MIN, CENTILE, PART_IMPOSSIBLES_MAX, PLANCHER_VITESSE_MS, Observation, apparier_troncons,  # noqa: E402
                            arrivees_observees, centile, classer, cle_troncon, table_duree_min, AMBIGU, ERREUR_DONNEE,
                            OBS_IMPOSSIBLE, RALENTI_ANNONCE, RALENTI_NON_ANNONCE)
 from serveur import CSV_GARES, TRACE, _charger  # noqa: E402
@@ -182,10 +182,10 @@ def main():
                   f"{c[RALENTI_ANNONCE]} ralentissements annoncés, {c[RALENTI_NON_ANNONCE]} non annoncés")
 
     if sortie is not None:
-        out = {"méthode": f"max(plancher {PLANCHER_VITESSE_MS:.0f} m/s, centile {CENTILE} des durées observées valides) si au moins {N_MIN} observations, sinon plancher ; correction estimée",
+        out = {"méthode": f"max(plancher {PLANCHER_VITESSE_MS:.0f} m/s, centile {CENTILE} des durées observées valides) si au moins {N_MIN} observations, sinon plancher ; plancher aussi si plus de {PART_IMPOSSIBLES_MAX:.0%} des observations sont impossibles ; correction estimée",
                "relevés": n_releves, "observations": len(observations),
                "troncons": {f"{a}|{b}": {"duree_min_s": round(t["duree_min_s"], 1), "source": t["source"], "n": t["n"],
-                                         "distance_m": round(t["distance_m"], 1)} for (a, b), t in sorted(table.items())}}
+                                         "distance_m": round(t["distance_m"], 1), "part_impossibles": round(t["part_impossibles"], 3)} for (a, b), t in sorted(table.items())}}
         sortie.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"\nécrit : {sortie}")
 
