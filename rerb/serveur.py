@@ -28,7 +28,7 @@ from pathlib import Path
 
 from duree_troncon import fournisseur_duree_min
 from gare import ReleveurGares
-from geometry import Geometry, load_morceaux, point_a_distance
+from geometry import Geometry, NoValidDistance, _dist, load_morceaux, point_a_distance
 from memoire import Memoire
 from position import DistanceInconnue, Etat, Reseau, distance_depuis_reseau, estimer, lire_train
 from stops import load_stops, stop_area_number
@@ -127,6 +127,53 @@ def _nom_sur(nom_gare, ref):
         return ref
 
 
+INCERTITUDE_MEDIANE_S = 44.0   # J2 bis (16/11/2026) : médiane de |départ réel - départ estimé|, mesurée à quai (docs/recap-j2bis-verite-gares.md)
+INCERTITUDE_P90_S = 117.0      # J2 bis : 90e centile. Ordres de grandeur d'un seul jour, pas une erreur mesurée en pleine voie ; biais +53 s non appliqué
+DECALAGES_S = tuple(sorted(set(range(-112, 113, 8)) | {-117, -44, 44, 117}))   # instants échantillonnés autour de `maintenant` (au plus ~8 s, soit ~120 m à 14,7 m/s : la droite entre deux points suit la voie à cette échelle) ; la médiane garde |décalage| <= 44 s
+
+
+def _distance_corrigee(e, duree_min):
+    """Distance depuis `e.gare` après correction d'un tronçon annoncé trop court (règle commune à la position et à l'incertitude).
+    -> (distance_m, vitesse implicite, minimum_s, source_min, incoherent, corrige)."""
+    distance_m, vitesse, incoherent, corrige, minimum_s, source_min = e.distance_m, None, False, False, None, None
+    if e.etat == Etat.EN_ROUTE and e.duree_s and e.longueur_m is not None:
+        vitesse = e.longueur_m / e.duree_s
+        plancher_s = e.longueur_m / VITESSE_MAX_MS
+        minimum_s, source_min = plancher_s, "plancher"
+        estimee = duree_min(e.gare, e.gare_suivante) if duree_min else None
+        if estimee and estimee[0] > plancher_s:
+            minimum_s, source_min = estimee[0], estimee[1]
+        if e.duree_s < minimum_s:
+            # Durée annoncée impossible (ex. 1 435 m en 60 s) : le train est supposé mettre `minimum_s` (durée minimale
+            # plausible du tronçon, sinon plancher 33 m/s) ; il n'avance jamais plus vite que cela depuis son départ.
+            incoherent = True
+            corrige = source_min == "estimée"
+            distance_m = min(e.distance_m, e.longueur_m * (e.fraction * e.duree_s) / minimum_s)
+    return distance_m, vitesse, minimum_s, source_min, incoherent, corrige
+
+
+def _incertitude(train, maintenant, distance, localiser, duree_min):
+    """Chemin parcouru par le train entre t - delta et t + delta (le long des rails, mêmes règles que la position affichée).
+    Un instant où le train n'est pas placé (avant la 1re gare, après le terminus, géométrie impossible) est omis, jamais inventé."""
+    points = []
+    for d in DECALAGES_S:
+        e = estimer(train, maintenant + timedelta(seconds=d), distance)
+        if e.etat not in (Etat.A_QUAI, Etat.EN_ROUTE):
+            continue
+        distance_m = _distance_corrigee(e, duree_min)[0]
+        suivante = e.gare_suivante if e.etat == Etat.EN_ROUTE else _gare_suivante(train, e.gare)
+        try:
+            lat, lon, _cap = localiser(e.gare, suivante, distance_m)
+        except (KeyError, ValueError, DistanceInconnue):
+            continue
+        if points and points[-1][1] == [lat, lon]:
+            continue   # train à l'arrêt : un point répété ne fait pas un trait (longueur nulle)
+        points.append((d, [lat, lon]))
+    return {"mediane_s": INCERTITUDE_MEDIANE_S, "p90_s": INCERTITUDE_P90_S,
+            "mediane": [pt for d, pt in points if abs(d) <= INCERTITUDE_MEDIANE_S],
+            "p90": [pt for _d, pt in points]}
+
+
 def calculer_trains(releve, maintenant, distance, localiser, nom_gare, duree_min=None):
     """Un dict par train du relevé, à l'instant `maintenant`. `localiser(gare, gare_suivante, distance_m)` ->
     (lat, lon, cap en degrés ou None) ; il peut lever une erreur de géométrie : le train reste dans la liste,
@@ -138,29 +185,19 @@ def calculer_trains(releve, maintenant, distance, localiser, nom_gare, duree_min
         e = estimer(train, maintenant, distance)
         lat = lon = cap = None
         motif = e.motif
-        distance_m, vitesse, incoherent, motif_vitesse = e.distance_m, None, False, None
-        corrige, minimum_s, source_min = False, None, None
-        if e.etat == Etat.EN_ROUTE and e.duree_s and e.longueur_m is not None:
-            vitesse = e.longueur_m / e.duree_s
-            plancher_s = e.longueur_m / VITESSE_MAX_MS
-            minimum_s, source_min = plancher_s, "plancher"
-            estimee = duree_min(e.gare, e.gare_suivante) if duree_min else None
-            if estimee and estimee[0] > plancher_s:
-                minimum_s, source_min = estimee[0], estimee[1]
-            if e.duree_s < minimum_s:
-                # Durée annoncée impossible (ex. 1 435 m en 60 s) : le train est supposé mettre `minimum_s` (durée minimale
-                # plausible du tronçon, sinon plancher 33 m/s) ; il n'avance jamais plus vite que cela depuis son départ.
-                incoherent = True
-                corrige = source_min == "estimée"
-                distance_m = min(e.distance_m, e.longueur_m * (e.fraction * e.duree_s) / minimum_s)
-                if corrige:
-                    motif_vitesse = (f"horaires incohérents : {e.longueur_m:.0f} m en {e.duree_s:.0f} s ({vitesse * 3.6:.0f} km/h) ; "
-                                     f"correction estimée : durée minimale plausible de ce tronçon {minimum_s:.0f} s, mesurée sur des relevés passés")
-                else:
-                    motif_vitesse = (f"horaires incohérents : {e.longueur_m:.0f} m en {e.duree_s:.0f} s "
-                                     f"({vitesse * 3.6:.0f} km/h) ; vitesse affichée limitée à {VITESSE_MAX_MS * 3.6:.0f} km/h")
+        distance_m, vitesse, minimum_s, source_min, incoherent, corrige = _distance_corrigee(e, duree_min)
+        motif_vitesse = None
+        if incoherent:
+            if corrige:
+                motif_vitesse = (f"horaires incohérents : {e.longueur_m:.0f} m en {e.duree_s:.0f} s ({vitesse * 3.6:.0f} km/h) ; "
+                                 f"correction estimée : durée minimale plausible de ce tronçon {minimum_s:.0f} s, mesurée sur des relevés passés")
+            else:
+                motif_vitesse = (f"horaires incohérents : {e.longueur_m:.0f} m en {e.duree_s:.0f} s "
+                                 f"({vitesse * 3.6:.0f} km/h) ; vitesse affichée limitée à {VITESSE_MAX_MS * 3.6:.0f} km/h")
+        terminus = False
         if e.etat in (Etat.A_QUAI, Etat.EN_ROUTE):
             suivante = e.gare_suivante if e.etat == Etat.EN_ROUTE else _gare_suivante(train, e.gare)
+            terminus = e.etat == Etat.A_QUAI and suivante is None   # arrivé au terminus : reste à quai 60 s puis disparaît (affiché en rouge)
             try:
                 lat, lon, cap = localiser(e.gare, suivante, distance_m)
             except (KeyError, ValueError, DistanceInconnue) as erreur:
@@ -172,9 +209,10 @@ def calculer_trains(releve, maintenant, distance, localiser, nom_gare, duree_min
             "correction_estimee": corrige, "duree_min_s": minimum_s, "source_duree_min": source_min,
             "gare": _nom_sur(nom_gare, e.gare),
             "gare_suivante": _nom_sur(nom_gare, e.gare_suivante),
-            "lat": lat, "lon": lon, "cap": cap,
+            "lat": lat, "lon": lon, "cap": cap, "terminus": terminus,
             "retard_s": retards.get(gare_pertinente) if gare_pertinente else None,
             "perime": e.perime, "reconstruit": e.reconstruit, "repare": e.repare,
+            "incertitude": _incertitude(train, maintenant, distance, localiser, duree_min) if lat is not None else None,
             "age_s": None if train.recorded_at is None else int((maintenant - train.recorded_at).total_seconds()),
         })
     return sortie
@@ -403,7 +441,7 @@ def _charger(csv_gares, trace):
 
 def construire_contexte(csv_gares=CSV_GARES, trace=TRACE):
     """Fichiers statiques -> (distance, localiser, nom_gare) pour `calculer_trains`. Hors ligne, aucun appel API.
-    localiser(gare, gare_suivante, distance_m) -> (lat, lon, cap) : toujours sur les rails (J1) ; sans gare suivante (terminus),
+    localiser(gare, gare_suivante, distance_m) -> (lat, lon, cap) : sur les rails à moins de 40 m près (Châtelet : jusqu'à ~120 m, tracé incomplet) ; sans gare suivante (terminus),
     coordonnées de la gare."""
     gares, geometrie, reseau = _charger(csv_gares, trace)
 
@@ -411,14 +449,34 @@ def construire_contexte(csv_gares=CSV_GARES, trace=TRACE):
     def troncon(a, b):
         return chemin_troncon(geometrie, reseau, a, b)
 
+    @functools.lru_cache(maxsize=None)
+    def quai(a):
+        """Point unique de la gare SUR la voie. Repli sur les coordonnées de la gare si aucun passage de la ligne n'est assez proche."""
+        try:
+            return geometrie.point_quai(a)
+        except (KeyError, NoValidDistance):
+            return (gares[a].lat, gares[a].lon)
+
     def localiser(gare, suivante, distance_m):
+        """Position sur le tronçon, recalée sur le quai commun de chaque gare : le chemin (choisi par paire de gares) peut finir
+        à 100 m du quai où le train repart ; on le décale donc de façon progressive (début -> quai de A, fin -> quai de B) au lieu
+        de laisser le train sauter à l'arrivée. Décalage nul là où le chemin passe déjà par le quai (médiane des tronçons : 4 m). Quai = passage central de la gare (Geometry.point_quai), donc sur la voie des tronçons voisins."""
         a = stop_area_number(gare)
         if suivante is None:
-            return (gares[a].lat, gares[a].lon, None)
-        chemin = troncon(a, stop_area_number(suivante))
-        d = distance_m or 0.0
-        cap = cap_degres(point_a_distance(chemin, max(d - 4.0, 0.0)), point_a_distance(chemin, d + 4.0))
-        lat, lon = point_a_distance(chemin, d)   # à quai (d = 0) : début du tronçon, SUR la voie, sans saut au démarrage
+            return (*quai(a), None)
+        b = stop_area_number(suivante)
+        chemin = troncon(a, b)
+        longueur = sum(_dist(p, q) for p, q in zip(chemin, chemin[1:]))
+        d = min(max(distance_m or 0.0, 0.0), longueur)
+        (dlat_a, dlon_a), (dlat_b, dlon_b) = ((q[0] - c[0], q[1] - c[1]) for q, c in ((quai(a), chemin[0]), (quai(b), chemin[-1])))
+
+        def avec_decalage(x):
+            point = point_a_distance(chemin, x)
+            g = x / longueur if longueur > 0 else 0.0
+            return (point[0] + dlat_a * (1 - g) + dlat_b * g, point[1] + dlon_a * (1 - g) + dlon_b * g)
+
+        lat, lon = avec_decalage(d)   # à quai (d = 0) : quai de la gare, SUR la voie, sans saut au démarrage
+        cap = cap_degres(avec_decalage(max(d - 4.0, 0.0)), avec_decalage(min(d + 4.0, longueur)))
         return (lat, lon, cap)
 
     def nom_gare(ref):

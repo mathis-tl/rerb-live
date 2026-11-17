@@ -127,6 +127,20 @@ class TestGeometrySynthetique(unittest.TestCase):
         with self.assertRaises(NoValidDistance):
             g.distance("A", "C")
 
+    def test_point_quai_sur_la_voie_au_plus_pres_de_la_gare(self):
+        # la gare C est à 300 m au sud de B, sur le 2e morceau : le point de quai est SUR la voie, tout près de la gare
+        for gare in ("A", "B", "C"):
+            lat, lon = self.g.point_quai(gare)
+            x = math.hypot((lon - pt(0, 0)[1]) * M_LON, (lat - pt(0, 0)[0]) * M_LAT)
+            self.assertTrue(math.isfinite(x))
+        lat, lon = self.g.point_quai("B")
+        self.assertAlmostEqual((lat - LAT0) * M_LAT, 0, delta=10)
+        self.assertAlmostEqual((lon - LON0) * M_LON, 1000, delta=15)
+
+    def test_point_quai_gare_inconnue(self):
+        with self.assertRaises(KeyError):
+            self.g.point_quai("Z")
+
     def test_distance_symetrique(self):
         self.assertAlmostEqual(self.g.distance("B", "A"), self.g.distance("A", "B"), delta=1e-6)
 

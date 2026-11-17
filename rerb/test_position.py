@@ -104,9 +104,23 @@ class TestBase(unittest.TestCase):
         self.assertIn("1re gare", e.motif)
 
     def test_7_termine(self):
-        e = ou(base(), "08:07:01")
+        # terminus sans départ : reste à quai SEJOUR_TERMINUS (60 s) après l'arrivée, puis « terminé »
+        e = ou(base(), "08:08:01")
         self.assertEqual(e.etat, Etat.TERMINE)
         self.assertIsNone(e.distance_m)
+
+    def test_7_bis_reste_a_quai_au_terminus_60_s(self):
+        # sinon le train disparaît de la carte à l'instant où il arrive (retour de Mathis, 17/11)
+        for h in ("08:07:00", "08:07:30", "08:08:00"):
+            e = ou(base(), h)
+            self.assertEqual((e.etat, e.gare), (Etat.A_QUAI, "C"), h)
+        self.assertEqual(ou(base(), "08:08:01").etat, Etat.TERMINE)
+
+    def test_7_ter_terminus_avec_depart_annonce_inchange(self):
+        # si PRIM donne un départ au dernier arrêt, on garde cette heure (pas de séjour ajouté)
+        t = base(C=passage("C", "08:07:00", "08:07:10"))
+        self.assertEqual(ou(t, "08:07:10").etat, Etat.A_QUAI)
+        self.assertEqual(ou(t, "08:07:11").etat, Etat.TERMINE)
 
 
 class TestHeuresManquantesEtDesordre(unittest.TestCase):

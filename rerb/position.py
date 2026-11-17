@@ -21,6 +21,9 @@ from enum import Enum
 from stops import StopNotFound, stop_area_number
 
 SEUIL_PERIME = timedelta(minutes=15)
+# Décision du 13/11 : terminus sans départ -> départ = arrivée. Amendée le 17/11 (retour de Mathis : le train disparaissait à l'instant
+# d'arriver) : le départ est posé 60 s après l'arrivée. Valeur par défaut, à ajuster par Mathis.
+SEJOUR_TERMINUS = timedelta(seconds=60)
 
 
 class DistanceInconnue(ValueError):
@@ -116,7 +119,7 @@ def estimer(train, t, distance, seuil_perime=SEUIL_PERIME):
         if arrivee is None and i == 0:
             arrivee = depart
         if depart is None and i == dernier:
-            depart = arrivee
+            depart = arrivee + SEJOUR_TERMINUS   # PRIM ne donne pas de départ au terminus : le train reste à quai un moment avant de disparaître
         if arrivee is None or depart is None:
             return _non_place("heures manquantes", perime)
         horaires.append((p.gare, arrivee, depart, p.reconstruit, p.repare))

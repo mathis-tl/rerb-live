@@ -11,55 +11,97 @@ window.fetch = (url, options) => {
 };
 
 const INTERVALLE_MS = 3000;            // le serveur n'appelle PRIM qu'au plus toutes les 120 s : interroger plus souvent ne coûte rien
-const ZOOM_PASTILLE = 14.5;            // en dessous, la rame (105 m) est trop petite : on ajoute une pastille de repère
 const COULEURS = { "à quai": [47, 133, 90], "en route": [43, 108, 176] };
+const ROUGE_TERMINUS = [226, 34, 48];   // train arrivé au terminus (séjour de 60 s avant de disparaître)
 const GRIS = [160, 167, 173];
 const MASSY = { longitude: 2.2588, latitude: 48.7255 };
 
-let geo = null, trains = [], statut = null, mode = "mixte", rayon = 700, zoom = 9, selection = null, gareChoisie = "58774", dernierePrevision = null;
+let geo = null, trains = [], statut = null, mode = "mixte", zoom = 9, pasZoom = 90, filtreDirection = "nord", groupeOuvert = null, groupes = new Map(), selection = null, gareChoisie = "58774", dernierePrevision = null;
 
-// --- Rame provisoire : 6 caisses en boîtes (105 m), cabine de tête plus sombre. La rame détaillée viendra en dernier.
-const L_CAISSE = 16.5, ECART = 1.2, LARGEUR = 2.8, HAUTEUR = 4.3;
+// --- Modèles 3D de la rame Z 8100 (web/modele-z8100.js, cotes de la fiche) : détaillé de près, « icône » (style Waze / Google Maps) de loin.
+const MODELES = { detail: ModeleZ8100.construire(), icone: ModeleZ8100.construire({ icone: true }) };
 
-function boite(x0, x1, y0, y1, z0, z1, positions, normales, indices) {
-  const faces = [   // [normale, 4 sommets]
-    [[0, 0, 1], [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]]],
-    [[0, 0, -1], [[x0, y1, z0], [x1, y1, z0], [x1, y0, z0], [x0, y0, z0]]],
-    [[1, 0, 0], [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]]],
-    [[-1, 0, 0], [[x0, y1, z0], [x0, y0, z0], [x0, y0, z1], [x0, y1, z1]]],
-    [[0, 1, 0], [[x1, y1, z0], [x0, y1, z0], [x0, y1, z1], [x1, y1, z1]]],
-    [[0, -1, 0], [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]]],
-  ];
-  for (const [n, sommets] of faces) {
-    const base = positions.length / 3;
-    for (const s of sommets) { positions.push(...s); normales.push(...n); }
-    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+// --- échelle du train
+// De près (zoom >= ZOOM_DETAIL) : modèle détaillé à la taille réelle. De loin : modèle icône (rame élargie et rehaussée une fois pour toutes),
+// agrandi en plus selon le zoom pour rester visible : ~40 px de long et ~10 px de large (rame 25 fois plus longue que large : un
+// agrandissement uniforme resterait un fil). Mètres par pixel de deck.gl (tuiles de 512 px) à la latitude de la ligne (~48,8°).
+// Taille AGRANDIE de loin : pas à l'échelle.
+const ZOOM_DETAIL = 16, CIBLE_RAME_PX = 40, CIBLE_LARGEUR_PX = 10;
+const LONGUEUR_RAME_M = 104.05, LARGEUR_ICONE_M = 4.2;
+function echelleTrain(zoom) {
+  const metresParPixel = 78271.517 * Math.cos(48.8 * Math.PI / 180) / Math.pow(2, zoom);
+  const borne = (v, max) => Math.min(max, Math.max(1, v));
+  if (zoom >= ZOOM_DETAIL) return { detail: true, longueur: 1, largeur: 1 };
+  return { detail: false, longueur: borne(CIBLE_RAME_PX * metresParPixel / LONGUEUR_RAME_M, 60), largeur: borne(CIBLE_LARGEUR_PX * metresParPixel / LARGEUR_ICONE_M, 120) };
+}
+// --- fin échelle du train
+
+// --- direction
+// Sens de marche d'après le cap (degrés, 0 = nord) : la ligne va globalement du sud (Saint-Rémy) au nord (CDG, Mitry). Cap inconnu : jamais masqué.
+const directionTrain = t => (t.cap == null ? null : (t.cap < 90 || t.cap >= 270 ? "nord" : "sud"));
+const garderTrain = (t, filtre) => filtre === "tout" || directionTrain(t) === null || directionTrain(t) === filtre;
+// Une direction à la fois (bouton sur la carte) : pour l'instant les deux sens ne sont pas affichés ensemble.
+const DIRECTIONS = { nord: { titre: "vers le NORD", detail: "Mitry-Claye · Aéroport CDG", autre: "sud" }, sud: { titre: "vers le SUD", detail: "Massy · Saint-Rémy · Robinson", autre: "nord" } };
+// --- fin direction
+
+// --- regroupement
+// Trains proches À L'ÉCRAN : un seul reste visible (le « chef » = plus petit identifiant), les autres s'effacent EN CONTINU entre
+// R_FUSION_PX (invisibles) et R_SEPARE_PX (entièrement visibles) ; la bulle « n » apparaît en sens inverse. Aucun saut quand ils s'écartent.
+const R_FUSION_PX = 14, R_SEPARE_PX = 30;
+function regrouper(points, selection) {
+  const tries = [...points].sort((a, b) => (a.course < b.course ? -1 : a.course > b.course ? 1 : 0));
+  const chefs = [], groupes = new Map(), alpha = {};
+  for (const t of tries) {
+    let chef = null, dmin = Infinity;
+    for (const c of chefs) {
+      const d = Math.hypot(t.x - c.x, t.y - c.y);
+      if (d < R_SEPARE_PX && d < dmin) { chef = c; dmin = d; }
+    }
+    if (!chef) { chefs.push(t); alpha[t.course] = 1; groupes.set(t.course, { chef: t.course, x: t.x, y: t.y, membres: [t.course], fondus: 0, opacite: 0 }); continue; }
+    const a = Math.min(1, Math.max(0, (dmin - R_FUSION_PX) / (R_SEPARE_PX - R_FUSION_PX)));
+    alpha[t.course] = t.course === selection ? 1 : a;   // le train choisi n'est jamais masqué
+    const g = groupes.get(chef.course);
+    g.membres.push(t.course);
+    if (a < 1) { g.fondus += 1; g.opacite = Math.max(g.opacite, 1 - a); }
   }
+  const bulles = [...groupes.values()].filter(g => g.fondus > 0).map(g => ({ chef: g.chef, x: g.x, y: g.y, n: 1 + g.fondus, alpha: g.opacite, membres: g.membres }));
+  return { alpha, bulles };
 }
+// --- fin regroupement
 
-function maillage(boites) {
-  const positions = [], normales = [], indices = [];
-  boites.forEach(b => boite(...b, positions, normales, indices));
-  return {
-    positions: { value: new Float32Array(positions), size: 3 },
-    normals: { value: new Float32Array(normales), size: 3 },
-    indices: { value: new Uint16Array(indices), size: 1 },
-  };
+// --- recherche de gare
+// Sans accents ni majuscules ni ponctuation : « chatelet » trouve « Châtelet - Les Halles ». Classement : début du nom, début d'un mot, contenu.
+const normaliser = x => String(x == null ? "" : x).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function suggestionsGares(gares, saisie, max = 8) {
+  const q = normaliser(saisie);
+  if (!q) return [];
+  const notes = [];
+  for (const g of gares) {
+    const n = normaliser(g.nom);
+    const note = n.startsWith(q) ? 0 : n.split(" ").some(m => m.startsWith(q)) ? 1 : n.includes(q) ? 2 : q.split(" ").every(m => n.includes(m)) ? 3 : -1;
+    if (note >= 0) notes.push([note, n.length, g]);
+  }
+  return notes.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2].nom.localeCompare(b[2].nom, "fr")).slice(0, max).map(x => x[2]);
 }
-
-const longueur = 6 * L_CAISSE + 5 * ECART;
-const caisses = [];
-for (let i = 0; i < 6; i++) {
-  const x0 = -longueur / 2 + i * (L_CAISSE + ECART);
-  caisses.push([x0, x0 + L_CAISSE, -LARGEUR / 2, LARGEUR / 2, 0.6, HAUTEUR]);
-}
-const MAILLAGE_CORPS = maillage(caisses);
-const MAILLAGE_CABINE = maillage([[longueur / 2 - 5, longueur / 2 + 0.3, -LARGEUR / 2 - 0.1, LARGEUR / 2 + 0.1, 0.6, HAUTEUR - 0.6]]);
+// --- fin recherche de gare
 
 // --- Couleur et orientation
-const couleurTrain = t => (t.perime ? GRIS : (COULEURS[t.etat] || GRIS));
+const couleurTrain = t => (t.perime ? GRIS : t.terminus ? ROUGE_TERMINUS : (COULEURS[t.etat] || GRIS));
 // cap serveur : degrés, 0 = nord, sens horaire. Orientation deck.gl : [tangage, lacet, roulis], lacet antihoraire depuis l'est.
 const orientation = t => [0, 90 - (t.cap == null ? 0 : t.cap), 0];
+
+// --- vue 3D
+// Rotation et inclinaison pilotables aux boutons (en plus du clic droit ou ⌃/⌘ + glisser) : cap modulo 360, inclinaison entre 0° (de dessus) et MAX_PITCH.
+const MAX_PITCH = 85;
+function pasVue(vue, dBearing, dPitch) {
+  return { bearing: (((vue.bearing || 0) + dBearing) % 360 + 360) % 360, pitch: Math.min(MAX_PITCH, Math.max(0, (vue.pitch || 0) + dPitch)) };
+}
+// --- fin vue 3D
+
+// --- hauteurs des bandes
+// Bandes d'incertitude posées juste au-dessus du sol, chacune à sa hauteur (plans coplanaires = z-fighting), sous le plancher de la rame (0,6 m).
+const Z_BANDE = { p90: 0.2, mediane: 0.35 };
+// --- fin hauteurs des bandes
 
 const placés = () => trains.filter(t => t.lat != null && t.lon != null);
 
@@ -70,20 +112,25 @@ const placés = () => trains.filter(t => t.lat != null && t.lon != null);
 const affiches = new Map();     // course -> { de:[lon,lat,cap], vers:[lon,lat,cap], t0, duree }
 const SEUIL_CORRECTION_M = 250, DUREE_CORRECTION_MAX_MS = 12000;
 const metres = (a, b) => Math.hypot((b[0] - a[0]) * 74000, (b[1] - a[1]) * 111000);
+// --- interpolation
 function ecartAngle(a, b) { return ((b - a + 540) % 360) - 180; }
 
+// Vitesse CONSTANTE sur tout le segment (pas de lissage « départ-arrivée » : il ralentissait à zéro à chaque relevé = avance, pause, avance).
 function positionAffichee(e, maintenant) {
   const f = e.duree <= 0 ? 1 : Math.min(1, Math.max(0, (maintenant - e.t0) / e.duree));
-  const k = f * f * (3 - 2 * f);     // adouci
-  return [e.de[0] + (e.vers[0] - e.de[0]) * k, e.de[1] + (e.vers[1] - e.de[1]) * k, e.de[2] + ecartAngle(e.de[2], e.vers[2]) * k, f];
+  return [e.de[0] + (e.vers[0] - e.de[0]) * f, e.de[1] + (e.vers[1] - e.de[1]) * f, e.de[2] + ecartAngle(e.de[2], e.vers[2]) * f, f];
 }
+
+// Le serveur n'envoie pas de cap à quai au terminus : on garde le dernier connu (sinon la rame se tourne vers le nord).
+const capOuPrecedent = (cap, precedent) => (cap != null ? cap : (precedent != null ? precedent : 0));
+// --- fin interpolation
 
 function majAffiches(maintenant) {
   const presents = new Set();
   placés().forEach(t => {
     presents.add(t.course);
-    const vers = [t.lon, t.lat, t.cap == null ? 0 : t.cap];
     const e = affiches.get(t.course);
+    const vers = [t.lon, t.lat, capOuPrecedent(t.cap, e ? e.vers[2] : null)];
     if (!e) { affiches.set(t.course, { de: vers, vers, t0: maintenant, duree: 0 }); return; }
     const [lon, lat, cap] = positionAffichee(e, maintenant);
     const saut = metres([lon, lat], vers);
@@ -95,7 +142,7 @@ function majAffiches(maintenant) {
 
 // trains placés, avec la position affichée (interpolée) à la place de la position reçue
 function placesAffiches(maintenant) {
-  return placés().map(t => {
+  return placés().filter(t => garderTrain(t, filtreDirection)).map(t => {
     const e = affiches.get(t.course);
     if (!e) return t;
     const [lon, lat, cap] = positionAffichee(e, maintenant);
@@ -109,14 +156,15 @@ function animer() {
   const pas = () => {
     animation = null;
     const maintenant = performance.now();
+    etapeCamera(maintenant);   // vol de caméra ou suivi d'un train
     afficher(maintenant);
-    if ([...affiches.values()].some(e => maintenant - e.t0 < e.duree)) animation = setTimeout(() => requestAnimationFrame(pas), 60);
+    if (vol || suivi || trains.some(t => t.terminus) || [...affiches.values()].some(e => maintenant - e.t0 < e.duree)) animation = requestAnimationFrame(pas);
   };
-  animation = setTimeout(() => requestAnimationFrame(pas), 0);
+  animation = requestAnimationFrame(pas);
 }
 
 // --- Décor 3D (OpenStreetMap, fichier local web/data/decor-massy.json, absent = pas de décor). Thème = celui du système.
-let decor = null;
+let decor = null;   // repli sans index : fichier unique de Massy, traité comme une seule cellule
 const sombre = window.matchMedia("(prefers-color-scheme: dark)");
 const PALETTE = {
   clair:  { fond: "#dfe5e3", sol: [236, 233, 226], vert: [200, 223, 190], eau: [166, 205, 230], bat: [214, 214, 216], bat_defaut: [222, 204, 176], quai: [244, 190, 180, 150],
@@ -130,10 +178,21 @@ function appliquerTheme() {
   document.documentElement.dataset.theme = sombre.matches ? "sombre" : "clair";
 }
 // Décor par cellules (web/data/decor/index.json + <cellule>.json, ~1,5 km chacune), chargées selon la vue à partir de ZOOM_DECOR.
+// Chaque cellule a ses propres couches (identifiant par cellule) : une cellule qui arrive ne redessine QUE elle, les autres gardent leur
+// géométrie déjà calculée (avant : toutes les cellules étaient refondues en un seul jeu de données, tout était recalculé à chaque arrivée = saccades).
 // Sans index : repli sur le fichier unique de Massy. Sans aucun fichier : pas de décor, la carte reste sans fond.
-const ZOOM_DECOR = 12.5, CELLULES_MAX = 80;
-let indexDecor = null, vueCarte = { longitude: 2.2588, latitude: 48.7255, zoom: 10.5 }, fusion = null, cleFusion = "";
-const cellulesDecor = new Map(), enChargement = new Set();   // cellule -> décor (null = absente/erreur)
+const ZOOM_DECOR = 12.5, CELLULES_MAX = 80, ZOOM_DEPART = 14;
+let indexDecor = null, vueCarte = { longitude: 2.2588, latitude: 48.7255, zoom: 14, pitch: 55, bearing: 0 };
+const cellulesDecor = new Map(), enChargement = new Set();   // cellule -> décor préparé (null = absente/erreur)
+const LARGEUR_ROUTE = { grand: 12, moyen: 9, petit: 6, pieton: 2.5 };
+
+function preparerCellule(d) {   // regroupe en 3 jeux de données par cellule (surfaces, lignes, bâtiments) une seule fois, au chargement
+  return {
+    surfaces: [...d.verts.map(p => ({ p, t: "vert" })), ...d.eaux.map(p => ({ p, t: "eau" })), ...d.quais.map(p => ({ p, t: "quai" }))],
+    lignes: [...d.cours_eau.map(c => ({ c, t: "eau", w: 6 })), ...d.routes.map(r => ({ c: r.c, t: r.t, w: LARGEUR_ROUTE[r.t] })), ...d.rails.map(c => ({ c, t: "rail", w: 1.2 }))],
+    batiments: d.batiments,
+  };
+}
 
 function clesVisibles() {
   if (!indexDecor || vueCarte.zoom < ZOOM_DECOR) return [];
@@ -144,20 +203,7 @@ function clesVisibles() {
       if (existe.has(x + "_" + y)) cles.push(x + "_" + y);
   return cles.slice(0, CELLULES_MAX);
 }
-
-function decorVisible() {
-  if (!indexDecor) return decor;
-  const cles = clesVisibles().filter(k => cellulesDecor.get(k));
-  const cle = cles.join();
-  if (cle !== cleFusion) {
-    cleFusion = cle;
-    fusion = cles.length ? { source: indexDecor.source } : null;
-    ["batiments", "routes", "rails", "quais", "verts", "eaux", "cours_eau"].forEach(k => {
-      if (fusion) fusion[k] = cles.flatMap(c => cellulesDecor.get(c)[k]);
-    });
-  }
-  return fusion;
-}
+const clesPretes = () => clesVisibles().filter(k => cellulesDecor.get(k));
 
 async function majDecor() {
   const cles = clesVisibles();
@@ -165,7 +211,7 @@ async function majDecor() {
   if (!manquantes.length) return;
   await Promise.all(manquantes.map(async k => {
     enChargement.add(k);
-    try { const r = await fetch("/data/decor/" + k + ".json"); cellulesDecor.set(k, r.ok ? await r.json() : null); }
+    try { const r = await fetch("/data/decor/" + k + ".json"); cellulesDecor.set(k, r.ok ? preparerCellule(await r.json()) : null); }
     catch (e) { /* réessayé au prochain déplacement */ }
     enChargement.delete(k);
   }));
@@ -182,33 +228,70 @@ async function chargerDecor() {
       majDecor();
     } else {
       const r = await fetch("/data/decor-massy.json");
-      if (r.ok) { decor = await r.json(); $("source-decor").textContent = decor.source; $("source-decor").hidden = false; }
+      if (r.ok) { const d = await r.json(); decor = preparerCellule(d); $("source-decor").textContent = d.source; $("source-decor").hidden = false; }
     }
   } catch (e) { /* pas de décor : la carte reste sans fond */ }
   appliquerTheme(); afficher();
 }
 sombre.addEventListener("change", () => { appliquerTheme(); afficher(); });
 
-const LARGEUR_ROUTE = { grand: 12, moyen: 9, petit: 6, pieton: 2.5 };
-function calquesDecor(decor) {
-  const c = palette(), L = [];
-  const poly = (id, data, couleur) => new deck.PolygonLayer({ id, data, getPolygon: d => d, getFillColor: couleur, stroked: false, filled: true });
-  L.push(poly("verts", decor.verts, c.vert), poly("eaux", decor.eaux, c.eau));
-  L.push(new deck.PathLayer({ id: "cours-eau", data: decor.cours_eau, getPath: d => d, getColor: c.eau, widthUnits: "meters", getWidth: 6, widthMinPixels: 1 }));
-  L.push(new deck.PathLayer({ id: "routes", data: decor.routes, getPath: d => d.c, getColor: d => c[d.t], widthUnits: "meters",
-    getWidth: d => LARGEUR_ROUTE[d.t], widthMinPixels: 0.6, capRounded: true, jointRounded: true }));
-  L.push(poly("quais-osm", decor.quais, c.quai));
-  L.push(new deck.PathLayer({ id: "rails", data: decor.rails, getPath: d => d, getColor: c.rail, widthUnits: "meters", getWidth: 1.2, widthMinPixels: 0.5 }));
-  L.push(new deck.PolygonLayer({ id: "batiments", data: decor.batiments, getPolygon: d => d.p, extruded: true, getElevation: d => d.h,
-    getFillColor: d => d.h_src === "defaut" ? c.bat_defaut : c.bat, updateTriggers: { getFillColor: [c.bat_defaut[0], c.bat[0]] }, material: { ambient: 0.55, diffuse: 0.6, shininess: 8, specularColor: [60, 64, 80] }, stroked: false }));
+// Une seule NOUVELLE cellule par image : le calcul des bâtiments d'une cellule (plusieurs dizaines de milliers de polygones) bloque l'image ;
+// en les ajoutant une par une, le déplacement de la carte reste fluide au lieu de se figer quand plusieurs cellules arrivent ensemble.
+const cellulesMontrees = new Set();
+let ajoutEnAttente = false;
+function cellulesAMontrer() {
+  const pretes = clesPretes(), sortie = [];
+  let nouvelle = false, attente = false;
+  for (const k of cellulesMontrees) if (!pretes.includes(k)) cellulesMontrees.delete(k);   // sorties du champ : à re-étaler quand elles reviennent
+  for (const k of pretes) {
+    if (!cellulesMontrees.has(k)) { if (nouvelle) { attente = true; continue; } cellulesMontrees.add(k); nouvelle = true; }
+    sortie.push(k);
+  }
+  if (attente && !ajoutEnAttente) { ajoutEnAttente = true; requestAnimationFrame(() => { ajoutEnAttente = false; afficher(); }); }
+  return sortie;
+}
+
+function calquesDecor() {
+  const c = palette(), theme = sombre.matches ? 1 : 0, L = [];
+  const cellules = indexDecor ? cellulesAMontrer().map(k => [k, cellulesDecor.get(k)]) : (decor ? [["massy", decor]] : []);
+  for (const [k, cell] of cellules) {
+    L.push(new deck.PolygonLayer({ id: "surfaces-" + k, data: cell.surfaces, getPolygon: d => d.p, getFillColor: d => c[d.t], updateTriggers: { getFillColor: [theme] }, stroked: false, filled: true }));
+    L.push(new deck.PathLayer({ id: "lignes-" + k, data: cell.lignes, getPath: d => d.c, getColor: d => c[d.t], getWidth: d => d.w, widthUnits: "meters", widthMinPixels: 0.6,
+      capRounded: true, jointRounded: true, updateTriggers: { getColor: [theme] } }));
+    L.push(new deck.PolygonLayer({ id: "batiments-" + k, data: cell.batiments, getPolygon: d => d.p, extruded: true, getElevation: d => d.h,
+      getFillColor: d => d.h_src === "defaut" ? c.bat_defaut : c.bat, updateTriggers: { getFillColor: [theme] }, material: { ambient: 0.55, diffuse: 0.6, shininess: 8, specularColor: [60, 64, 80] }, stroked: false }));
+  }
   return L;
+}
+
+// --- noms de gares
+// Noms de gares lisibles sur tout fond : texte clair à contour sombre en thème sombre, texte sombre à contour clair en thème clair.
+const COULEUR_NOM = { clair: { texte: [20, 30, 40, 255], contour: [255, 255, 255, 245] }, sombre: { texte: [255, 255, 255, 255], contour: [14, 20, 30, 235] } };
+const couleurNomGare = () => COULEUR_NOM[sombre.matches ? "sombre" : "clair"];
+// --- fin noms de gares
+
+// Couches d'un niveau de modèle (détaillé ou icône) : une couche par pièce (couleur). L'icône a un disque dessous, coloré selon l'état du train ;
+// les vitres du modèle détaillé sont semi-transparentes et dessinées en dernier sans écrire la profondeur.
+function calquesTrains(p, ech, couleurAlpha) {
+  const modele = ech.detail ? MODELES.detail : MODELES.icone, niveau = ech.detail ? "detail" : "icone";
+  const echelle = () => [ech.longueur, ech.largeur, ech.largeur];
+  const matiere = { ambient: 0.55, diffuse: 0.65, shininess: 24, specularColor: [90, 90, 90] };
+  return modele.pieces.map(piece => {
+    const vitre = piece.nom === "vitre", disque = piece.nom === "disque";
+    return new deck.SimpleMeshLayer({
+      id: `trains-${niveau}-${piece.nom}`, data: p, mesh: piece.maillage, getPosition: d => [d.lon, d.lat, 0],
+      getColor: d => disque ? couleurAlpha(d) : [...piece.couleur, Math.round((vitre ? 90 : 255) * d.alpha)],
+      getOrientation: orientation, getScale: echelle, updateTriggers: { getScale: [ech.longueur, ech.largeur], getColor: [] }, sizeScale: 1,
+      pickable: !vitre, material: matiere,
+      parameters: vitre ? { depthWriteEnabled: false } : undefined,
+    });
+  });
 }
 
 function calques(maintenant = performance.now()) {
   const L = [];
   if (!geo) return L;
-  const dv = decorVisible();
-  if (dv) L.push(...calquesDecor(dv));
+  L.push(...calquesDecor());
   L.push(new deck.PathLayer({
     id: "trace", data: geo.trace, getPath: d => d, getColor: [120, 132, 142], widthUnits: "meters", getWidth: 5,
     widthMinPixels: 1.5, capRounded: true, jointRounded: true,
@@ -217,24 +300,44 @@ function calques(maintenant = performance.now()) {
     id: "gares", data: geo.gares, getPosition: d => [d.lon, d.lat], getRadius: 35, radiusMinPixels: 3, radiusMaxPixels: 9,
     getFillColor: [255, 255, 255], getLineColor: [29, 42, 51], stroked: true, lineWidthMinPixels: 1.2, pickable: true,
   }));
+  const nom = couleurNomGare();
   L.push(new deck.TextLayer({
-    id: "noms-gares", data: geo.gares, getPosition: d => [d.lon, d.lat], getText: d => d.nom, getSize: 12, sizeUnits: "pixels",
-    getPixelOffset: [8, -8], getTextAnchor: "start", getColor: [29, 42, 51], characterSet: "auto", fontFamily: "system-ui, sans-serif",
-    visible: zoom >= 11.5, background: false, outlineWidth: 3, outlineColor: [255, 253, 248, 230], fontSettings: { sdf: true },
+    id: "noms-gares", data: geo.gares, getPosition: d => [d.lon, d.lat], getText: d => d.nom, getSize: 13, sizeUnits: "pixels",
+    getPixelOffset: [9, -9], getTextAnchor: "start", getColor: nom.texte, characterSet: "auto", fontFamily: "system-ui, sans-serif", fontWeight: 600,
+    visible: zoom >= 11.5, background: false, outlineWidth: 4, outlineColor: nom.contour, fontSettings: { sdf: true }, pickable: true,
+    updateTriggers: { getColor: [sombre.matches], outlineColor: [sombre.matches] },
+    parameters: { depthCompare: "always" },   // jamais cachés par les bâtiments extrudés (Cité Universitaire)
   }));
-  const p = placesAffiches(maintenant);
-  if (mode !== "train" && rayon > 0) {
+  const p0 = placesAffiches(maintenant);
+  const vp = deckgl && deckgl.getViewports ? deckgl.getViewports()[0] : null;
+  const rg = vp ? regrouper(p0.map(t => { const [x, y] = vp.project([t.lon, t.lat]); return { course: t.course, x, y }; }), selection) : { alpha: {}, bulles: [] };
+  groupes = new Map(rg.bulles.map(b => [b.chef, b.membres]));
+  const p = p0.map(t => ({ ...t, alpha: rg.alpha[t.course] == null ? 1 : rg.alpha[t.course] })).filter(t => t.alpha > 0.02);
+  const couleurAlpha = t => [...couleurTrain(t), Math.round(255 * t.alpha)];
+  if (mode !== "train") {   // incertitude : chemin approximatif le long de la voie (serveur, J2 bis, points ~8 s), jamais un disque : l'erreur est le long des rails ; non ancré sur la position animée (saute à chaque relevé)
+    const avecChemin = (d, cle) => d.alpha > 0.3 && d.incertitude && d.incertitude[cle] && d.incertitude[cle].length > 1;
+    for (const [id, cle, largeur, couleur] of [["incertitude-p90", "p90", 26, [214, 158, 46, 70]], ["incertitude-mediane", "mediane", 14, [183, 121, 31, 130]]]) {
+      L.push(new deck.PathLayer({
+        id, data: p.filter(d => avecChemin(d, cle)), getPath: d => d.incertitude[cle].map(([lat, lon]) => [lon, lat, Z_BANDE[cle]]),
+        getColor: couleur, widthUnits: "meters", getWidth: largeur, widthMinPixels: id === "incertitude-p90" ? 5 : 3, capRounded: true, jointRounded: true,
+        parameters: { depthWriteEnabled: false },   // translucide : ne cache ni le pied des trains ni l'autre bande (z-fighting avec le sol)
+      }));
+    }
+  }
+  if (mode === "zone") {
     L.push(new deck.ScatterplotLayer({
-      id: "zone", data: p, getPosition: d => [d.lon, d.lat], getRadius: rayon, radiusUnits: "meters", filled: true, stroked: true,
-      getFillColor: [214, 158, 46, 55], getLineColor: [183, 121, 31, 200], lineWidthMinPixels: 1.5,
-      updateTriggers: { getRadius: rayon },
+      id: "pastilles", data: p, getPosition: d => [d.lon, d.lat], getRadius: 1, radiusMinPixels: 6,
+      radiusMaxPixels: 7, getFillColor: couleurAlpha, getLineColor: [255, 255, 255], stroked: true, lineWidthMinPixels: 1.5,
+      pickable: true,
     }));
   }
-  if (mode === "zone" || zoom < ZOOM_PASTILLE) {
+  const auTerminus = p.filter(d => d.terminus);
+  if (auTerminus.length) {   // halo rouge brillant qui pulse autour des trains arrivés au terminus
+    const pulse = 0.5 + 0.5 * Math.sin(maintenant / 280);
     L.push(new deck.ScatterplotLayer({
-      id: "pastilles", data: p, getPosition: d => [d.lon, d.lat], getRadius: 1, radiusMinPixels: mode === "zone" ? 6 : 5,
-      radiusMaxPixels: 7, getFillColor: couleurTrain, getLineColor: [255, 255, 255], stroked: true, lineWidthMinPixels: 1.5,
-      pickable: true,
+      id: "terminus-halo", data: auTerminus, getPosition: d => [d.lon, d.lat], getRadius: 55, radiusUnits: "meters", radiusMinPixels: 16,   // ~ la demi-longueur de la rame
+      filled: true, stroked: true, getFillColor: d => [...ROUGE_TERMINUS, Math.round((40 + 50 * pulse) * d.alpha)], getLineColor: d => [255, 60, 75, Math.round((170 + 85 * pulse) * d.alpha)],
+      lineWidthMinPixels: 3, parameters: { depthCompare: "always" },
     }));
   }
   if (selection) {
@@ -243,15 +346,17 @@ function calques(maintenant = performance.now()) {
       radiusMinPixels: 16, radiusMaxPixels: 16, filled: false, stroked: true, getLineColor: [245, 158, 11], lineWidthMinPixels: 3,
     }));
   }
-  if (mode !== "zone") {
-    L.push(new deck.SimpleMeshLayer({
-      id: "trains", data: p, mesh: MAILLAGE_CORPS, getPosition: d => [d.lon, d.lat, 0], getColor: couleurTrain,
-      getOrientation: orientation, sizeScale: 1, pickable: true,
-      material: { ambient: 0.55, diffuse: 0.6, shininess: 24, specularColor: [200, 200, 200] },
+  if (mode !== "zone") L.push(...calquesTrains(p, echelleTrain(zoom), couleurAlpha));
+  if (vp && rg.bulles.length) {   // bulle « n » à côté du train chef ; son opacité est l'inverse de celle des trains qui s'effacent
+    const bulles = rg.bulles.map(b => { const [lon, lat] = vp.unproject([b.x + 13, b.y - 13]); return { ...b, lon, lat }; });
+    L.push(new deck.ScatterplotLayer({
+      id: "bulles", data: bulles, getPosition: d => [d.lon, d.lat], getRadius: 1, radiusMinPixels: 10, radiusMaxPixels: 10, stroked: true,
+      getFillColor: d => [29, 42, 51, Math.round(235 * d.alpha)], getLineColor: d => [255, 255, 255, Math.round(255 * d.alpha)], lineWidthMinPixels: 1.5, pickable: true,
     }));
-    L.push(new deck.SimpleMeshLayer({
-      id: "cabines", data: p, mesh: MAILLAGE_CABINE, getPosition: d => [d.lon, d.lat, 0], getColor: [38, 42, 48],
-      getOrientation: orientation, sizeScale: 1,
+    L.push(new deck.TextLayer({
+      id: "bulles-nombre", data: bulles, getPosition: d => [d.lon, d.lat], getText: d => String(d.n), getSize: 12, sizeUnits: "pixels",
+      getColor: d => [255, 255, 255, Math.round(255 * d.alpha)], characterSet: "auto", fontFamily: "system-ui, sans-serif", fontWeight: 700,
+      getTextAnchor: "middle", getAlignmentBaseline: "center",
     }));
   }
   return L;
@@ -261,40 +366,126 @@ function calques(maintenant = performance.now()) {
 let deckgl = null;
 function afficher(maintenant = performance.now()) { if (deckgl) deckgl.setProps({ layers: calques(maintenant) }); }
 
+// --- Vue : état piloté par nous (viewState contrôlé), pour que la caméra puisse suivre un train ou voler vers une gare sans combat avec deck.gl.
+// Déplacer = glisser (comme Google Maps / Apple Plans). Tourner / incliner = clic droit ou Maj + glisser, deux doigts, boutons, ou mode « Tourner ».
+const LIMITES_VUE = { minZoom: 8, maxZoom: 21, maxPitch: MAX_PITCH };
+const nettoyerVue = v => ({ longitude: v.longitude, latitude: v.latitude, zoom: v.zoom, pitch: v.pitch || 0, bearing: v.bearing || 0, ...LIMITES_VUE });
+let vue = nettoyerVue({ ...MASSY, zoom: ZOOM_DEPART, pitch: 55, bearing: 0 });
+let modeGlisser = "pan";   // « pan » : glisser déplace ; « rotate » : glisser tourne et incline
+
+function appliquerVue(v) {
+  vue = nettoyerVue(v);
+  vueCarte = { longitude: vue.longitude, latitude: vue.latitude, zoom: vue.zoom, pitch: vue.pitch, bearing: vue.bearing };
+  zoom = vue.zoom; pasZoom = Math.round(zoom * 10);
+  if (deckgl) deckgl.setProps({ viewState: vue });
+  majBoussole(); majDecor();
+}
+
+// --- vol de caméra
+// Vol (durée fixe, ease in-out) de la vue actuelle vers une cible. La cible peut être un train : on vise sa position AFFICHÉE à chaque image,
+// donc la caméra arrive exactement dessus et continue de le suivre (`suivi`). Pour un long trajet, la caméra dézoome en cours de route.
+const easeInOut = f => (f < 0.5 ? 2 * f * f : 1 - Math.pow(-2 * f + 2, 2) / 2);
+function etapeVol(de, vers, f, dip) {
+  const e = easeInOut(f);
+  return {
+    longitude: de.longitude + (vers.longitude - de.longitude) * e, latitude: de.latitude + (vers.latitude - de.latitude) * e,
+    zoom: de.zoom + (vers.zoom - de.zoom) * e - dip * Math.sin(Math.PI * f),
+    pitch: de.pitch + (vers.pitch - de.pitch) * e, bearing: de.bearing + ecartAngle(de.bearing, vers.bearing) * e,
+  };
+}
+function voler(cible, duree = 900) {   // cible : objet de vue, ou fonction qui le renvoie (suivi d'un train)
+  const de = { ...vueCarte };
+  const but = typeof cible === "function" ? cible() : cible;
+  const km = Math.hypot((but.longitude - de.longitude) * 74, (but.latitude - de.latitude) * 111);
+  vol = { t0: performance.now(), duree, de, cible, dip: km > 2 ? Math.min(2.5, Math.log2(km) * 0.6) : 0 };
+  animer();
+}
+// --- fin vol de caméra
+
+function etapeCamera(maintenant) {   // appelée à chaque image : fait avancer le vol, puis recale la caméra sur le train suivi
+  let v = null;
+  if (vol) {
+    const f = Math.min(1, (maintenant - vol.t0) / vol.duree), but = typeof vol.cible === "function" ? vol.cible() : vol.cible;
+    v = etapeVol(vol.de, but, f, vol.dip);
+    if (f >= 1) vol = null;
+  } else if (suivi) {
+    const c = cibleSuivi();
+    if (c) v = { ...vueCarte, longitude: c.longitude, latitude: c.latitude };
+  }
+  if (v) appliquerVue(v);
+}
+
+// Boutons : tourner (± 30°), incliner (± 10°), boussole (clic = nord en haut). Vol court, centre et zoom inchangés.
+function changerVue(dBearing, dPitch) { voler({ ...vueCarte, ...pasVue(vueCarte, dBearing, dPitch) }, 300); }
+function majBoussole() {
+  const b = $("boussole");
+  if (b) b.style.setProperty("--cap", `${-(vueCarte.bearing || 0)}deg`);
+  const c = $("boussole-carte");
+  if (c) c.style.setProperty("--cap", `${-(vueCarte.bearing || 0)}deg`);
+}
+function reglerGlisser(m) {
+  modeGlisser = m;
+  if (deckgl) deckgl.setProps({ views: vueDeck() });
+  const b = $("mode-glisser");
+  if (b) { b.textContent = m === "rotate" ? "⟳ Tourner" : "✋ Déplacer"; b.setAttribute("aria-pressed", m === "rotate"); }
+}
+const vueDeck = () => new deck.MapView({ id: "carte", controller: { dragMode: modeGlisser, dragRotate: true, touchRotate: true, keyboard: true, inertia: 300, scrollZoom: { speed: 0.012, smooth: true } } });
+
+// --- suivi d'un train / aller à une gare
+let suivi = null, vol = null;
+function trainAffiche(course) { return placesAffiches(performance.now()).find(t => t.course === course); }
+function cibleSuivi() {
+  const t = suivi && trainAffiche(suivi);
+  return t ? { longitude: t.lon, latitude: t.lat } : null;
+}
+function arreterSuivi() { suivi = null; vol = null; majFiche(); }
+function suivreTrain(course) {
+  const t = trainAffiche(course);
+  if (!t) return;
+  selection = course; suivi = course; groupeOuvert = null;
+  voler(() => { const c = cibleSuivi() || { longitude: t.lon, latitude: t.lat }; return { ...c, zoom: Math.max(vueCarte.zoom, ZOOM_SUIVI), pitch: Math.max(vueCarte.pitch, 50), bearing: vueCarte.bearing }; }, 1100);
+  detail_train(); majFiche(); afficherProchains(); afficher();
+}
+const ZOOM_SUIVI = 18, ZOOM_GARE = 17.2;
+function allerGare(g) {
+  suivi = null; selection = null;
+  gareChoisie = g.ref; dernierePrevision = null; sequenceGare++;
+  const choix = $("choix-gare"); if (choix) choix.value = g.ref;
+  voler({ longitude: g.lon, latitude: g.lat, zoom: ZOOM_GARE, pitch: 60, bearing: vueCarte.bearing }, 1100);
+  detail_train(); majFiche(); afficherProchains(); actualiserGare(); afficher();
+}
+// --- fin suivi
+
 function creerDeck() {
   deckgl = new deck.Deck({
     parent: document.getElementById("carte"),
-    views: new deck.MapView({ id: "carte", controller: true }),
-    initialViewState: { ...MASSY, zoom: 10.5, pitch: 55, bearing: 0, minZoom: 8, maxZoom: 21, maxPitch: 80 },
-    controller: true,
+    views: vueDeck(),
+    viewState: vue,
     layers: [],
     getTooltip: ({ object, layer }) => {
       if (!object) return null;
-      if (layer.id === "gares") return object.nom;
-      if (object.course) return `${object.etat}${object.perime ? " (périmé)" : ""} : ${object.gare || "?"}${object.gare_suivante ? " → " + object.gare_suivante : ""}`;
+      if (layer.id === "gares" || layer.id === "noms-gares") return object.nom + " : cliquer pour zoomer";
+      if (object.membres) return object.n + " trains proches : cliquer pour la liste";
+      if (object.course) return `${object.etat}${object.perime ? " (périmé)" : ""} : ${object.gare || "?"}${object.gare_suivante ? " → " + object.gare_suivante : ""} (cliquer pour le suivre)`;
       return null;
     },
-    onViewStateChange: ({ viewState }) => {
-      const avant = zoom >= ZOOM_PASTILLE, avantNoms = zoom >= 11.5, avantCle = cleFusion;
-      zoom = viewState.zoom;
-      vueCarte = { longitude: viewState.longitude, latitude: viewState.latitude, zoom: viewState.zoom };
-      majDecor();
-      const changeDecor = indexDecor && clesVisibles().filter(k => cellulesDecor.get(k)).join() !== avantCle;
-      if ((zoom >= ZOOM_PASTILLE) !== avant || (zoom >= 11.5) !== avantNoms || changeDecor) afficher();
+    onViewStateChange: ({ viewState, interactionState }) => {
+      const avantPas = pasZoom, avantNoms = zoom >= 11.5, avantCles = clesPretes().join();
+      const i = interactionState || {};
+      // glisser pour déplacer = l'utilisateur prend la main, on ne suit plus (le zoom à la molette déplace aussi un peu : il ne compte pas)
+      if (i.isDragging && i.isPanning && !i.isZooming) { if (suivi) arreterSuivi(); vol = null; }
+      else if (i.isDragging || i.isZooming || i.isRotating) vol = null;
+      appliquerVue(viewState);
+      if (Math.round(zoom * 10) !== avantPas || (zoom >= 11.5) !== avantNoms || clesPretes().join() !== avantCles) afficher();
     },
-    onClick: ({ object }) => {
-      selection = object && object.course ? object.course : selection;
-      detail_train(); afficherProchains(); afficher();
+    onClick: ({ object, layer }) => {
+      if (object && (layer.id === "gares" || layer.id === "noms-gares")) { allerGare(object); return; }   // gare : zoom dessus
+      if (object && object.membres) { groupeOuvert = object.chef; selection = object.chef; suivi = null; }   // bulle : liste des trains du groupe
+      else if (object && object.course) { suivreTrain(object.course); return; }                             // train : zoom, suivi et fiche
+      else if (!object) { selection = null; groupeOuvert = null; if (suivi) arreterSuivi(); }
+      detail_train(); majFiche(); afficherProchains(); afficher();
     },
   });
-}
-
-function aller(vue) {
-  deckgl.setProps({ initialViewState: { ...vue, transitionDuration: 900, transitionInterpolator: new deck.FlyToInterpolator() } });
-  zoom = vue.zoom;
-  vueCarte = { longitude: vue.longitude, latitude: vue.latitude, zoom: vue.zoom };
-  majDecor();
-  afficher();
 }
 
 function boiteLigne() {
@@ -309,14 +500,36 @@ const $ = id => document.getElementById(id);
 const esc = x => String(x == null ? "" : x).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 function minutes(s) { return s == null ? "inconnu" : (s >= 0 ? "+" : "−") + Math.round(Math.abs(s) / 60) + " min"; }
 
+function ligneGroupe(m) {   // un train d'un groupe de la bulle ; toute donnée PRIM passe par esc()
+  return '<div class="special"><b>' + esc(m.etat) + (m.perime ? " (périmé)" : "") + "</b> : " + esc(m.gare || "?")
+    + (m.gare_suivante ? " → " + esc(m.gare_suivante) : "") + "<br>Retard : " + minutes(m.retard_s) + "</div>";
+}
+
+function corpsTrain(t) {   // toute donnée PRIM passe par esc()
+  return `<b>${esc(t.etat)}${t.perime ? " (périmé)" : ""}</b>${t.perime ? '<br><span class="note">périmé : pas de nouvelle information de PRIM sur ce train depuis plus de 15 min ; sa position vient de l\'horaire seul.</span>' : ""}<br>Gare : ${esc(t.gare || "—")}${t.gare_suivante ? "<br>Prochaine gare : " + esc(t.gare_suivante) : ""}`
+    + `<br>Retard : ${minutes(t.retard_s)}<br>Mise à jour du train il y a ${t.age_s == null ? "?" : Math.round(t.age_s / 60)} min`
+    + (t.horaires_incoherents ? `<br><b class="retard">⚠ ${esc(t.motif_vitesse)}</b>` : "")
+    + (t.reconstruit ? "<br><i>heures reconstruites (gare retirée par PRIM)</i>" : "") + `<br><span class="note">${esc(t.course)}</span>`;
+}
+
 function detail_train() {
+  const membres = groupeOuvert && groupes.get(groupeOuvert);
+  if (membres) {
+    $("detail").innerHTML = "<b>" + membres.length + " trains proches</b>" + membres.map(c => trains.find(x => x.course === c)).filter(Boolean).map(ligneGroupe).join("");
+    return;
+  }
   const t = trains.find(x => x.course === selection);
-  $("detail").innerHTML = t
-    ? `<b>${esc(t.etat)}${t.perime ? " (périmé)" : ""}</b><br>Gare : ${esc(t.gare || "—")}${t.gare_suivante ? "<br>Prochaine gare : " + esc(t.gare_suivante) : ""}`
-      + `<br>Retard : ${minutes(t.retard_s)}<br>Mise à jour du train il y a ${t.age_s == null ? "?" : Math.round(t.age_s / 60)} min`
-      + (t.horaires_incoherents ? `<br><b class="retard">⚠ ${esc(t.motif_vitesse)}</b>` : "")
-      + (t.reconstruit ? "<br><i>heures reconstruites (gare retirée par PRIM)</i>" : "") + `<br><span class="note">${esc(t.course)}</span>`
-    : "Clique sur un train.";
+  $("detail").innerHTML = t ? corpsTrain(t) : "Clique sur un train.";
+}
+
+// Fiche flottante sur la carte : infos du train choisi, mises à jour à chaque relevé ; bouton pour suivre ou arrêter de suivre.
+function majFiche() {
+  const f = $("fiche-train"), t = trains.find(x => x.course === selection);
+  if (!f) return;
+  f.hidden = !t || !!groupeOuvert;
+  if (f.hidden) return;
+  $("fiche-corps").innerHTML = corpsTrain(t);
+  $("fiche-suivi").textContent = suivi === selection ? "Caméra sur le train : arrêter" : "Suivre ce train";
 }
 
 function panneau() {
@@ -373,7 +586,7 @@ function afficherProchains() {
     else if (p.retard_s == null) droite.append(noeud("span", "retard ?", "note"));
     else droite.append(noeud("span", Math.abs(p.retard_s) < 60 ? "à l'heure" : "+" + Math.round(p.retard_s / 60) + " min", Math.abs(p.retard_s) < 60 ? "ponctuel" : "retard"));
     tr.append(droite);
-    tr.addEventListener("click", () => { selection = p.course; detail_train(); afficherProchains(); afficher(); });
+    tr.addEventListener("click", () => { if (trainAffiche(p.course)) { suivreTrain(p.course); return; } selection = p.course; detail_train(); majFiche(); afficherProchains(); afficher(); });
     return tr;
   });
   if (!lignes.length) { const tr = noeud("tr"); tr.append(noeud("td", d.statut === "plafond" ? "—" : "Aucun passage à venir dans la réponse.")); lignes.push(tr); }
@@ -407,22 +620,62 @@ async function actualiser() {
     const d = await r.json();
     if (!Array.isArray(d.trains)) throw new Error("réponse invalide");
     statut = d; trains = d.trains; majAffiches(performance.now());
-    if (selection && !trains.some(t => t.course === selection)) selection = null;   // le train choisi a disparu
+    if (selection && !trains.some(t => t.course === selection)) { selection = null; suivi = null; }   // le train choisi a disparu
   } catch (e) {
     statut = { ...(statut || {}), erreur: "serveur local injoignable", bloque: false, plafond: (statut && statut.plafond) || { utilises: "?", maximum: "?" } };
   }
   trainsEnCours = false;
-  panneau(); detail_train(); afficherProchains(); afficher(); animer();
+  panneau(); detail_train(); majFiche(); afficherProchains(); afficher(); animer();
+}
+
+let maj = false;
+
+function reglerDirection(d) {
+  filtreDirection = d;
+  const info = DIRECTIONS[d];
+  $("direction-texte").textContent = "Trains affichés : " + info.titre + " (" + info.detail + ")";
+  $("direction-changer").textContent = "Voir les trains vers le " + DIRECTIONS[info.autre].titre.replace("vers le ", "").toLowerCase();
+  document.querySelectorAll("input[name=direction]").forEach(i => { i.checked = i.value === d; });
+  if (suivi && !garderTrain(trains.find(t => t.course === suivi) || {}, d)) arreterSuivi();
+  afficher();
+}
+
+function initialiserRecherche() {
+  const champ = $("recherche"), liste = $("suggestions");
+  let courantes = [], actif = -1;
+  const fermer = () => { liste.hidden = true; courantes = []; actif = -1; champ.setAttribute("aria-expanded", "false"); };
+  const choisir = g => { champ.value = g.nom; fermer(); champ.blur(); allerGare(g); };
+  const surligner = () => [...liste.children].forEach((li, k) => { li.classList.toggle("actif", k === actif); li.setAttribute("aria-selected", k === actif); });
+  function maj_() {
+    courantes = suggestionsGares(geo.gares, champ.value);
+    liste.replaceChildren(...courantes.map((g, k) => {
+      const li = noeud("li", g.nom); li.setAttribute("role", "option");
+      li.addEventListener("mousedown", e => { e.preventDefault(); choisir(g); });
+      li.addEventListener("mousemove", () => { actif = k; surligner(); });
+      return li;
+    }));
+    if (champ.value && !courantes.length) { const li = noeud("li", "Aucune gare de ce nom", "vide"); liste.replaceChildren(li); }
+    liste.hidden = !champ.value; actif = courantes.length ? 0 : -1; surligner(); champ.setAttribute("aria-expanded", String(!liste.hidden));
+  }
+  champ.addEventListener("input", maj_);
+  champ.addEventListener("focus", () => { champ.select(); if (champ.value) maj_(); });
+  champ.addEventListener("blur", fermer);
+  champ.addEventListener("keydown", e => {
+    if (e.key === "ArrowDown" && courantes.length) { actif = (actif + 1) % courantes.length; surligner(); e.preventDefault(); }
+    else if (e.key === "ArrowUp" && courantes.length) { actif = (actif - 1 + courantes.length) % courantes.length; surligner(); e.preventDefault(); }
+    else if (e.key === "Enter" && courantes.length) { choisir(courantes[Math.max(0, actif)]); e.preventDefault(); }
+    else if (e.key === "Escape") { champ.value = ""; fermer(); champ.blur(); }
+  });
+  addEventListener("keydown", e => { if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); champ.focus(); } });
 }
 
 async function demarrer() {
   document.querySelectorAll("input[name=mode]").forEach(i => i.addEventListener("change", () => {
     mode = i.value; $("avertissement-train").hidden = mode !== "train"; afficher();
   }));
-  const r = $("rayon");
-  const fixer = v => { rayon = +v; r.value = v; $("valeur-rayon").textContent = rayon + " m"; afficher(); };
-  r.addEventListener("input", () => fixer(r.value));
-  document.querySelectorAll("[data-rayon]").forEach(b => b.addEventListener("click", () => fixer(b.dataset.rayon)));
+  document.querySelectorAll("input[name=direction]").forEach(i => i.addEventListener("change", () => reglerDirection(i.value)));
+  $("direction-changer").addEventListener("click", () => reglerDirection(DIRECTIONS[filtreDirection].autre));
+  reglerDirection(filtreDirection);
   try {
     const rg = await fetch("/geo");
     if (!rg.ok) throw new Error("HTTP " + rg.status);
@@ -440,14 +693,29 @@ async function demarrer() {
   choix.addEventListener("change", () => { gareChoisie = choix.value; dernierePrevision = null; sequenceGare++; afficherProchains(); actualiserGare(); });
   creerDeck();
   chargerDecor();
-  $("vue-ligne").addEventListener("click", () => aller(boiteLigne()));
-  $("vue-massy").addEventListener("click", () => aller({ ...MASSY, zoom: 13.2, pitch: 55, bearing: 0 }));
-  $("vue-quai").addEventListener("click", () => aller({ longitude: 2.25877, latitude: 48.72552, zoom: 17.5, pitch: 62, bearing: 30 }));
+  reglerGlisser("pan");
+  initialiserRecherche();
+  $("vue-ligne").addEventListener("click", () => voler(boiteLigne(), 1400));
+  $("tourner-gauche").addEventListener("click", () => changerVue(-30, 0));
+  $("tourner-droite").addEventListener("click", () => changerVue(30, 0));
+  $("incliner-plus").addEventListener("click", () => changerVue(0, 10));
+  $("incliner-moins").addEventListener("click", () => changerVue(0, -10));
+  $("boussole").addEventListener("click", () => changerVue(-(vueCarte.bearing || 0), 0));
+  $("boussole-carte").addEventListener("click", () => changerVue(-(vueCarte.bearing || 0), 0));
+  $("zoom-plus").addEventListener("click", () => voler({ ...vueCarte, zoom: vueCarte.zoom + 1 }, 300));
+  $("zoom-moins").addEventListener("click", () => voler({ ...vueCarte, zoom: vueCarte.zoom - 1 }, 300));
+  $("incliner-carte").addEventListener("click", () => voler({ ...vueCarte, pitch: vueCarte.pitch > 20 ? 0 : 60 }, 500));   // 2D / 3D
+  $("mode-glisser").addEventListener("click", () => reglerGlisser(modeGlisser === "pan" ? "rotate" : "pan"));
+  $("fiche-suivi").addEventListener("click", () => { if (suivi === selection) arreterSuivi(); else suivreTrain(selection); });
+  $("fiche-fermer").addEventListener("click", () => { selection = null; groupeOuvert = null; arreterSuivi(); detail_train(); afficherProchains(); afficher(); });
+  // Maj enfoncée : glisser tourne / incline (comme le clic droit), relâchée : glisser déplace
+  addEventListener("keydown", e => { if (e.key === "Shift" && modeGlisser === "pan" && !e.repeat && document.activeElement.tagName !== "INPUT") { maj = true; reglerGlisser("rotate"); } });
+  addEventListener("keyup", e => { if (e.key === "Shift" && maj) { maj = false; reglerGlisser("pan"); } });
   // vue de départ réglable par l'adresse : ?vue=longitude,latitude,zoom,inclinaison,cap (utile pour partager ou tester une vue)
   const v = new URLSearchParams(location.search).get("vue");
   if (v) {
     const [longitude, latitude, z, pitch, bearing] = v.split(",").map(Number);
-    if ([longitude, latitude, z].every(Number.isFinite)) aller({ longitude, latitude, zoom: z, pitch: pitch || 0, bearing: bearing || 0 });
+    if ([longitude, latitude, z].every(Number.isFinite)) appliquerVue({ longitude, latitude, zoom: z, pitch: pitch || 0, bearing: bearing || 0 });
   }
   await actualiser();
   setInterval(actualiser, INTERVALLE_MS);

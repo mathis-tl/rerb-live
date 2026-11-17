@@ -192,6 +192,19 @@ class Geometry:
         points, cum = self._lines[i]
         return extraire(points, cum, pk_a, pk_b)
 
+    def point_quai(self, station):
+        """Point (lat, lon) SUR la voie, au plus près des coordonnées de la gare (passage de plus petit décalage, tous morceaux
+        confondus). Point unique par gare : sert de quai commun à la fin du tronçon qui arrive et au début de celui qui repart.
+        Lève KeyError (gare inconnue) ou NoValidDistance (aucun passage à moins du rayon)."""
+        candidats = [(pas.offset, point_a_distance(points, pas.pk))
+                     for (points, cum), passages in zip(self._lines, self._passes_of(station)) for pas in passages]
+        if not candidats:
+            raise NoValidDistance(f"aucun passage de la ligne à moins de {self._radius:.0f} m de la gare {station}")
+        # Le passage le plus proche des coordonnées de la gare peut être une autre voie (Massy - Palaiseau : 53 m sur un morceau isolé,
+        # alors que presque tous les passages, donc tous les tronçons voisins, sont à ~90 m sur la voie principale). On prend donc le
+        # passage le plus CENTRAL (médoïde : plus petite somme des distances aux autres), à égalité le plus proche de la gare.
+        return min(candidats, key=lambda c: (round(sum(_dist(c[1], autre[1]) for autre in candidats), 3), c[0]))[1]
+
     def neighbor_pairs(self):
         """Couples de gares voisines (consécutives sur un morceau), sans orientation, triés."""
         pairs = set()

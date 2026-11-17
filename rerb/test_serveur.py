@@ -221,7 +221,7 @@ class TestCalculerTrains(unittest.TestCase):
             return (48.0, 2.0, 45.0)
         r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360), appel(C, 600, 660)]))
         calculer_trains(r, T0 + timedelta(seconds=30), distance, espion, nom)
-        self.assertEqual(appels, [(A, B, 0.0)])
+        self.assertEqual(appels[0], (A, B, 0.0))   # 1er appel = position actuelle ; les suivants sont les points d'incertitude
 
     def test_a_quai_au_terminus_pas_de_gare_suivante(self):
         appels = []
@@ -231,8 +231,18 @@ class TestCalculerTrains(unittest.TestCase):
             return (48.0, 2.0, None)
         r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
         t = calculer_trains(r, T0 + timedelta(seconds=330), distance, espion, nom)[0]
-        self.assertEqual(appels, [(B, None)])
+        self.assertEqual(appels[0], (B, None))   # 1er appel = position actuelle ; les suivants sont les points d'incertitude
         self.assertIsNone(t["cap"])
+
+    def test_au_terminus_drapeau_pour_la_carte(self):
+        espion = lambda gare, suivante, distance_m: (48.0, 2.0, None)
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
+        au_terminus = calculer_trains(r, T0 + timedelta(seconds=330), distance, espion, nom)[0]
+        self.assertEqual((au_terminus["etat"], au_terminus["terminus"]), ("à quai", True), "arrivé au terminus : le séjour de 60 s s'affiche en rouge")
+        a_quai_normal = calculer_trains(r, T0 + timedelta(seconds=30), distance, espion, nom)[0]
+        self.assertFalse(a_quai_normal["terminus"], "à quai à l'origine : pas le terminus")
+        en_route = calculer_trains(r, T0 + timedelta(seconds=150), distance, espion, nom)[0]
+        self.assertFalse(en_route["terminus"])
 
     def test_non_place_cap_vide(self):
         annule = appel(B, 300, 360)
@@ -246,6 +256,106 @@ class TestCalculerTrains(unittest.TestCase):
                       course("T2", []), course("T3", [appel(A, 900, 960), appel(B, 1200, 1260)]))
         refs = sorted(t["course"] for t in calculer_trains(r, T0 + timedelta(seconds=120), distance, localiser, nom))
         self.assertEqual(refs, ["T1", "T2", "T3"])
+
+
+    # --- incertitude : chemin le long des rails entre t - delta et t + delta (J2 bis : médiane 44 s, 90e centile 117 s) ---
+    def _en_route(self, secondes=180):
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)], enregistre=0))
+        return calculer_trains(r, T0 + timedelta(seconds=secondes), distance, localiser, nom)[0]
+
+    def test_incertitude_deltas_et_extremites(self):
+        inc = self._en_route()["incertitude"]
+        self.assertEqual((inc["mediane_s"], inc["p90_s"]), (44.0, 117.0))
+        # f = (t - 60) / 240 ; lat = 48 + f ; t = 180 : médiane 136 s -> 224 s, p90 63 s -> 297 s
+        self.assertAlmostEqual(inc["mediane"][0][0], 48 + 76 / 240)
+        self.assertAlmostEqual(inc["mediane"][-1][0], 48 + 164 / 240)
+        self.assertAlmostEqual(inc["p90"][0][0], 48 + 3 / 240)
+        self.assertAlmostEqual(inc["p90"][-1][0], 48 + 237 / 240)
+        self.assertGreaterEqual(len(inc["p90"]), 20)   # échantillonnage dense : la droite entre deux points ne coupe pas un virage
+
+    def test_incertitude_chemin_ordonne_et_contient_la_position_actuelle(self):
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)], enregistre=0))
+        rang = {A: 0, B: 1}
+        cumulee = lambda gare, suivante, d: (48.0 + rang[gare] + d / 1000.0, 2.0, 90.0)   # B après A : latitude croissante
+        t = calculer_trains(r, T0 + timedelta(seconds=180), distance, cumulee, nom)[0]
+        inc = t["incertitude"]
+        for chemin in (inc["mediane"], inc["p90"]):
+            lats = [pt[0] for pt in chemin]
+            self.assertEqual(lats, sorted(lats))
+            self.assertTrue(any(abs(lat - t["lat"]) < 1e-9 for lat in lats))
+            self.assertTrue(all(len(pt) == 2 for pt in chemin))
+
+    def test_incertitude_mediane_incluse_dans_p90(self):
+        inc = self._en_route()["incertitude"]
+        self.assertLess(len(inc["mediane"]), len(inc["p90"]))
+        for pt in inc["mediane"]:
+            self.assertIn(pt, inc["p90"])
+
+    def test_incertitude_point_non_calculable_omis_jamais_invente(self):
+        # à t = 30 s (à quai en A, 1re arrivée à 0 s), t - 44 s et t - 117 s tombent avant la 1re gare : omis
+        t = self._en_route(30)
+        chemin = t["incertitude"]["p90"]
+        self.assertTrue(chemin)
+        self.assertTrue(all(pt[0] >= 48.0 for pt in chemin))
+        self.assertLess(len(chemin), len(self._en_route(180)["incertitude"]["p90"]))
+
+    def test_incertitude_localiser_echoue_sur_un_point_pas_de_plantage(self):
+        def limite(gare, suivante, distance_m):
+            if distance_m > 600:
+                raise ValueError("hors tracé")
+            return localiser(gare, suivante, distance_m)
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)], enregistre=0))
+        t = calculer_trains(r, T0 + timedelta(seconds=180), distance, limite, nom)[0]
+        chemin = t["incertitude"]["p90"]
+        self.assertTrue(chemin and all(pt[0] <= 48.6 for pt in chemin))
+        self.assertTrue(48.55 < max(pt[0] for pt in chemin) <= 48.6)   # arrêté à la limite (600 m), rien d'inventé au-delà
+        self.assertAlmostEqual(t["lat"], 48.5)
+
+    def test_incertitude_absente_si_non_place(self):
+        r = releve_de(course("T1", [appel(A, 100, 60), appel(B, 300, 360)]))   # départ avant l'arrivée : heures incohérentes
+        t = calculer_trains(r, T0 + timedelta(seconds=180), distance, localiser, nom)[0]
+        self.assertEqual(t["etat"], Etat.NON_PLACE.value)
+        self.assertIsNone(t["incertitude"])
+
+    def test_incertitude_a_quai_toute_la_plage_pas_de_trait_de_longueur_nulle(self):
+        # arrêt de 1 h : tous les instants donnent la même position -> un seul point, la page ne dessine rien
+        r = releve_de(course("T1", [appel(A, 0, 3600), appel(B, 3900, 3960)], enregistre=0))
+        t = calculer_trains(r, T0 + timedelta(seconds=1800), distance, localiser, nom)[0]
+        self.assertLessEqual(len(t["incertitude"]["p90"]), 1)
+        self.assertLessEqual(len(t["incertitude"]["mediane"]), 1)
+
+    def test_incertitude_terminus_ne_depasse_pas_le_terminus(self):
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)], enregistre=0))
+        t = calculer_trains(r, T0 + timedelta(seconds=330), distance, localiser, nom)[0]   # à quai au terminus B
+        self.assertEqual(t["etat"], "à quai")
+        chemin = t["incertitude"]["p90"]
+        self.assertTrue(chemin)
+        self.assertTrue(all(pt[0] <= 48.0 + 1.0 + 1e-9 for pt in chemin))   # jamais au-delà de B (lat 49)
+
+    def test_incertitude_utilise_la_correction_de_duree(self):
+        # 1 000 m annoncés en 60 s (100 m/s) : corrigé à 120 s ; le chemin suit la position corrigée, pas la position brute
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 120, 180)], enregistre=0))
+        corr = lambda a, b: (120.0, "estimée")
+        t = calculer_trains(r, T0 + timedelta(seconds=90), distance, localiser, nom, duree_min=corr)[0]
+        brut = 48 + (30 / 60)    # sans correction : f = 0,5
+        self.assertLess(t["lat"], brut)
+        self.assertTrue(any(abs(pt[0] - t["lat"]) < 1e-9 for pt in t["incertitude"]["p90"]))
+        self.assertLess(max(pt[0] for pt in t["incertitude"]["p90"]), 48 + 1.0)
+
+    def test_incertitude_a_cheval_sur_deux_troncons_reste_ordonnee(self):
+        rang = {A: 0, B: 1, C: 2}
+
+        def cumulee(gare, suivante, distance_m):   # latitude croissante le long de toute la ligne (1 000 m par tronçon)
+            return (48.0 + rang[gare] + distance_m / 1000.0, 2.0, 90.0)
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360), appel(C, 600, 660)], enregistre=0))
+        t = calculer_trains(r, T0 + timedelta(seconds=310), distance, cumulee, nom)[0]   # à quai en B (arrêt 300-360 s)
+        lats = [pt[0] for pt in t["incertitude"]["p90"]]
+        self.assertEqual(lats, sorted(lats))
+        self.assertLess(lats[0], 48 + 1.0)    # début sur le tronçon A -> B
+        self.assertGreaterEqual(lats[-1], 48 + 1.0)   # fin en B ou après
+
+    def test_incertitude_serialisable_en_json(self):
+        json.dumps(self._en_route())
 
 
 class TestPlafond(unittest.TestCase):
@@ -676,6 +786,77 @@ class TestContexteReel(unittest.TestCase):
         t = calculer_trains(r, T0 + timedelta(seconds=30), distance_, localiser_, nom_)[0]
         self.assertEqual((t["etat"], t["gare"]), ("à quai", "Massy - Palaiseau"))
         self.assertIsNotNone(t["lat"])
+
+
+class TestContinuiteAuxGares(unittest.TestCase):
+    """Aucune téléportation aux gares (retour de Mathis, Châtelet) : la fin d'un tronçon = le quai de la gare = le début du suivant."""
+
+    def setUp(self):
+        self.distance, self.localiser, self.nom = construire_contexte()
+        self.chaine = chaine_demo()
+
+    @staticmethod
+    def metres(a, b):
+        return math.hypot((b[1] - a[1]) * 74000, (b[0] - a[0]) * 111000)
+
+    def test_arrivee_quai_depart_sont_le_meme_point(self):
+        pires = []
+        for avant, gare, apres in zip(self.chaine, self.chaine[1:], self.chaine[2:]):
+            arrivee = self.localiser(avant, gare, self.distance(avant, gare))[:2]
+            quai = self.localiser(gare, apres, 0.0)[:2]
+            depart = self.localiser(gare, apres, 1.0)[:2]
+            pires.append((max(self.metres(arrivee, quai), self.metres(quai, depart)), self.nom(gare)))
+        pire = max(pires)
+        self.assertLess(pire[0], 5.0, f"saut de {pire[0]:.0f} m à {pire[1]}")
+
+    def test_terminus_au_meme_point_que_l_arrivee(self):
+        a, b = self.chaine[-2], self.chaine[-1]
+        arrivee = self.localiser(a, b, self.distance(a, b))[:2]
+        self.assertLess(self.metres(arrivee, self.localiser(b, None, 0.0)[:2]), 5.0)
+
+    def test_pas_de_saut_superieur_a_la_vitesse_max_sur_toute_la_chaine(self):
+        pas, pire = 3.0, 0.0
+        for a, b in zip(self.chaine, self.chaine[1:]):
+            longueur, d, precedent = self.distance(a, b), 0.0, None
+            while d <= longueur:
+                p = self.localiser(a, b, d)[:2]
+                if precedent:
+                    pire = max(pire, self.metres(precedent, p) - 14.7 * pas)   # le pas simulé avance de 14,7 m/s
+                precedent, d = p, d + 14.7 * pas
+        self.assertLess(pire, 10.0, f"écart de {pire:.0f} m au-delà du déplacement attendu")
+
+    def test_ecart_a_la_voie_borne_sur_tous_les_troncons(self):
+        # Revue 17/11 : avec le passage « le plus proche », le quai de Massy - Palaiseau était sur une autre voie : train jusqu'à 148 m des rails.
+        # Le quai est maintenant le passage central (médoïde) : le train reste sur la voie des tronçons voisins.
+        from geometry import _dist
+        from troncon import chemin_troncon
+        from serveur import _charger
+        from stops import stop_area_number
+        gares, geom, res = _charger(*[__import__("serveur").CSV_GARES, __import__("serveur").TRACE])
+        pire, pire_chatelet = 0.0, 0.0
+        for a, b in geom.neighbor_pairs():
+            chemin = chemin_troncon(geom, res, a, b)
+            ra, rb = f"STIF:StopArea:SP:{a}:", f"STIF:StopArea:SP:{b}:"
+            for f in (0.0, 0.5, 1.0):
+                lat, lon, _ = self.localiser(ra, rb, f * self.distance(ra, rb))
+                ecart = 1e9
+                for p, q in zip(chemin, chemin[1:]):
+                    n = max(1, int(_dist(p, q) // 10))
+                    ecart = min(ecart, *(_dist((lat, lon), (p[0] + (q[0] - p[0]) * k / n, p[1] + (q[1] - p[1]) * k / n)) for k in range(n + 1)))
+                if "45102" in (a, b):   # Châtelet : le tracé des morceaux voisins s'arrête ~120 m avant la gare (défaut des données, pas du quai)
+                    pire_chatelet = max(pire_chatelet, ecart)
+                else:
+                    pire = max(pire, ecart)
+        self.assertLess(pire, 40.0, f"écart à la voie de {pire:.0f} m hors Châtelet")
+        self.assertLess(pire_chatelet, 130.0, f"écart à la voie de {pire_chatelet:.0f} m vers Châtelet")
+
+    def test_position_reste_pres_des_rails(self):
+        # le décalage progressif ne doit pas écarter le train du tracé de plus de 150 m
+        a, b = "STIF:StopArea:SP:58774:", "STIF:StopArea:SP:47940:"
+        for f in (0.0, 0.25, 0.5, 0.75, 1.0):
+            lat, lon, cap = self.localiser(a, b, f * self.distance(a, b))
+            self.assertTrue(48.7 < lat < 48.75 and 2.2 < lon < 2.3)
+            self.assertTrue(cap is None or 0 <= cap < 360)
 
 
 if __name__ == "__main__":
