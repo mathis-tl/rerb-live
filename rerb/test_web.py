@@ -5,6 +5,7 @@ ajoute un CDN, une tuile ou une police en ligne dans la page, ce test échoue. L
 (web/vendor) est exclu : son contenu est audité dans web/vendor/VERSIONS.md.
 """
 import json
+import math
 import re
 import unittest
 from pathlib import Path
@@ -274,7 +275,7 @@ class TestCodeCarte(unittest.TestCase):
         # avant : toutes les cellules fusionnées en un seul jeu de données, tout recalculé à chaque cellule arrivée (saccades au déplacement)
         self.assertIn('id: "surfaces-" + k', self.js)
         self.assertIn('id: "batiments-" + k', self.js)
-        self.assertNotIn("flatMap", self.js)
+        self.assertNotIn("flatMap", self.js.split("function calquesDecor")[1].split("\n}\n")[0], "pas de fusion de toutes les cellules")
         self.assertIn("cellulesAMontrer", self.js, "une seule nouvelle cellule par image")
 
     def test_clic_gare_zoome_clic_train_suit_et_affiche_la_fiche(self):
@@ -299,6 +300,72 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("t.terminus ? ROUGE_TERMINUS", self.js)
         self.assertIn('id: "terminus-halo"', self.js)
         self.assertIn("trains.some(t => t.terminus)", self.js, "le halo pulse : l'animation continue tant qu'un train est au terminus")
+
+    # --- rame articulée : chaque caisse sur la voie
+
+    def _voitures(self, expression):
+        return self._node("// --- voitures", "// --- fin voitures", expression)
+
+    @staticmethod
+    def _metres(a, b, lat=48.8):
+        return math.hypot((b["lon"] - a["lon"]) * 111320 * math.cos(math.radians(lat)), (b["lat"] - a["lat"]) * 110540)
+
+    def test_rame_droite_sur_voie_droite(self):
+        # voie vers le nord, 400 m : quatre caisses alignées, espacées de 26 m, cap nord, la motrice de tête devant
+        c = self._voitures("voituresSurVoie([[2, 48.7982], [2, 48.8018]], 2, 48.8)")
+        self.assertEqual(len(c), 4)
+        for k in range(3):
+            self.assertAlmostEqual(self._metres(c[k], c[k + 1]), 26.0 if k == 1 else 26.0125, delta=0.2)
+        self.assertTrue(all(abs(v["lon"] - 2) < 1e-7 and (v["cap"] < 0.01 or v["cap"] > 359.99) for v in c))
+        self.assertGreater(c[0]["lat"], c[1]["lat"], "la tête (rang 0) est devant : au nord")
+        self.assertGreater(c[2]["lat"], c[3]["lat"])
+        self.assertAlmostEqual(self._metres({"lon": 2, "lat": 48.8}, {"lon": 2, "lat": (c[1]["lat"] + c[2]["lat"]) / 2}), 0, delta=0.05, msg="rame centrée sur la position du train")
+
+    def test_rame_se_plie_dans_une_courbe(self):
+        # arc de cercle de 150 m de rayon (de 0° à 90°), le train au milieu de l'arc : chaque caisse tourne un peu plus que la précédente
+        R, ky, kx = 150.0, 110540.0, 111320 * math.cos(math.radians(48.8))
+        arc = [[2 + R * (1 - math.cos(a)) / kx, 48.8 + R * math.sin(a) / ky] for a in [math.radians(k * 90 / 60) for k in range(61)]]
+        milieu = arc[30]
+        c = self._voitures(f"voituresSurVoie({json.dumps(arc)}, {milieu[0]}, {milieu[1]})")
+        caps = [v["cap"] for v in c]
+        self.assertTrue(all(caps[i] > caps[i + 1] for i in range(3)) or all(caps[i] < caps[i + 1] for i in range(3)), f"caps monotones d'une caisse à l'autre : {caps}")
+        total = abs(caps[0] - caps[3])
+        # 3 x 26 m d'arc sur 150 m de rayon : ~29,8° entre les centres de la tête et de la queue
+        self.assertAlmostEqual(total, math.degrees(78.0 / R), delta=2.0)
+        for v in c:   # chaque centre de caisse est à moins de 25 cm de l'arc (flèche de la corde de 18,5 m : 0,29 m, la moitié de ce qu'une rame rigide de 104 m aurait)
+            self.assertAlmostEqual(math.hypot((v["lon"] - 2 - R / kx) * kx, (v["lat"] - 48.8) * ky), R, delta=0.4)
+
+    def test_position_hors_de_la_voie_prolongee_en_ligne_droite(self):
+        # le train est 30 m avant le début du tracé : la voie est prolongée tout droit, rien ne se bloque au début
+        voie = "[[2, 48.8], [2, 48.8036]]"
+        avant = self._voitures(f"voituresSurVoie({voie}, 2, 48.8 - 30 / 110540)")
+        dedans = self._voitures(f"voituresSurVoie({voie}, 2, 48.8 + 60 / 110540)")
+        self.assertAlmostEqual(avant[0]["lat"], 48.8 - 30 / 110540 + 39.0125 / 110540, places=6)
+        self.assertAlmostEqual(dedans[0]["lat"], 48.8 + 60 / 110540 + 39.0125 / 110540, places=6)
+
+    def test_voie_absente_ou_degeneree(self):
+        self.assertIsNone(self._voitures("voituresSurVoie(null, 2, 48.8)"))
+        self.assertIsNone(self._voitures("voituresSurVoie([[2, 48.8]], 2, 48.8)"))
+        self.assertIsNone(self._voitures("voituresSurVoie([[2, 48.8], [2, 48.8]], 2, 48.8)"))
+
+    def test_sans_voie_la_rame_est_droite_selon_le_cap(self):
+        # pas de voie (terminus, serveur sans tracé) : voie fictive dans la direction du cap -> comportement de l'ancienne rame rigide
+        c = self._voitures("voitures([{ course: 'X', lon: 2, lat: 48.8, cap: 90, voie: null, alpha: 1 }])")
+        self.assertEqual([v["rang"] for v in c], [0, 1, 2, 3])
+        self.assertTrue(all(abs(v["cap"] - 90) < 0.01 for v in c))
+        self.assertGreater(c[0]["lon"], c[3]["lon"], "cap 90 = vers l'est : la tête est à l'est")
+        self.assertTrue(all(v["course"] == "X" for v in c), "chaque caisse porte le train (clic, info-bulle)")
+
+    def test_les_caisses_arriere_sont_tournees_de_180_degres(self):
+        o = self._voitures("[0, 1, 2, 3].map(rang => orientationVoiture({ cap: 90, rang }))")
+        self.assertEqual([x[1] % 360 for x in o], [0, 0, 180, 180])
+
+    def test_la_carte_utilise_les_caisses_de_pres_et_l_icone_de_loin(self):
+        corps = self.js.split("function calquesTrains(")[1].split("function calques(")[0]
+        self.assertIn("voitures(p)", corps)
+        self.assertIn("getOrientation: orientationVoiture", corps)
+        self.assertIn("MODELES.icone", corps)
+        self.assertIn("t.voie", self.js.split("function majAffiches")[1].split("function placesAffiches")[0], "la voie est gardée entre deux relevés")
 
     def _noms(self, expression):
         import shutil, subprocess
@@ -363,11 +430,48 @@ class TestCodeCarte(unittest.TestCase):
         self.assertEqual(self._gares("   "), [])
         self.assertEqual(self._gares("zzz"), [])
 
-    def test_peremption_expliquee(self):
+    def test_donnees_anciennes_et_horaire_theorique_expliques(self):
         html = (WEB / "index.html").read_text(encoding="utf-8")
         self.assertIn("15 min", html)
-        self.assertIn("périmé", html)
+        self.assertIn("données anciennes", html)
+        self.assertIn("horaire théorique", html)
         self.assertIn("pas de nouvelle information", self.js)
+        self.assertIn("n'annonce aucun écart", self.js)
+        # les notes ne prétendent pas plus que ce qu'on sait (décision du 18/11, piste A)
+        self.assertIn("extrapolée à partir de la dernière estimation", self.js)
+        self.assertNotIn("vient de l'horaire seul", self.js)
+        self.assertIn("soit le train est à l'heure, soit PRIM ne suit pas ce train en temps réel", self.js)
+        self.assertIn("soit le train est à l'heure, soit PRIM ne suit pas ce train en temps réel", html)
+
+    def test_le_mot_perime_a_disparu_de_la_page(self):
+        # le mot était trompeur (décision du 18/11) ; le champ JSON `perime` reste servi un temps, mais la page ne le lit plus
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        for nom, texte in (("index.html", html), ("carte.js", self.js)):
+            self.assertNotIn("périm", texte.lower(), nom)
+            self.assertNotIn(".perime", texte, nom)
+
+    def _etiquettes(self, t):
+        return self._node("// --- etiquettes", "// --- fin etiquettes", f"etiquettes({json.dumps(t)})")
+
+    def test_etiquettes_d_un_train(self):
+        self.assertEqual(self._etiquettes({"etat": "en route"}), [])
+        (e,) = self._etiquettes({"donnees_anciennes": True})
+        self.assertEqual(e["libelle"], "Données anciennes")
+        self.assertIn("15 min", e["note"])
+        self.assertIn("extrapolée", e["note"])
+        (e,) = self._etiquettes({"horaire_theorique": True})
+        self.assertEqual(e["libelle"], "Horaire théorique")
+        self.assertIn("n'annonce aucun écart", e["note"])
+        self.assertIn("soit PRIM ne suit pas ce train en temps réel", e["note"])
+        deux = self._etiquettes({"donnees_anciennes": True, "horaire_theorique": True})
+        self.assertEqual([x["libelle"] for x in deux], ["Données anciennes", "Horaire théorique"])
+
+    def test_couleur_grise_seulement_pour_des_donnees_anciennes(self):
+        c = lambda t: self._node("// --- Couleur et orientation", "// --- etiquettes",
+                                 f"(globalThis.GRIS = 'gris', globalThis.ROUGE_TERMINUS = 'rouge', globalThis.COULEURS = {{'en route': 'bleu'}}, couleurTrain({json.dumps(t)}))")
+        gris = c({"donnees_anciennes": True, "etat": "en route"})
+        self.assertEqual(c({"horaire_theorique": True, "etat": "en route"}), c({"etat": "en route"}), "horaire théorique : pas de couleur d'alerte")
+        self.assertNotEqual(gris, c({"etat": "en route"}))
 
     def test_batiments_a_hauteur_par_defaut_ont_une_teinte_et_une_legende(self):
         self.assertIn('h_src === "defaut"', self.js)

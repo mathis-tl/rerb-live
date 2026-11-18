@@ -14,10 +14,11 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from geometry import NoValidDistance
+from lissage import Lisseur
 from memoire import Memoire
 from position import Etat
 from gare import ReleveurGares
-from serveur import (CSV_GARES, TRACE, ErreurPrim, appeler_prim, Plafond, Releve, Releveur, calculer_trains, chaine_demo, charger_geo,
+from serveur import (CSV_GARES, DEMI_VOIE_M, TRACE, ErreurPrim, appeler_prim, Plafond, Releve, Releveur, calculer_trains, chaine_demo, charger_geo,
                      construire_contexte, consolider_livraison, creer_serveur, lire_cle)
 
 T0 = datetime(2026, 11, 16, 10, 0, 0, tzinfo=timezone.utc)
@@ -85,12 +86,12 @@ def releve_de(*trains, recu=0):
 
 class TestCalculerTrains(unittest.TestCase):
     def test_en_route_avec_position_et_age(self):
-        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)], enregistre=0))
+        r = releve_de(course("T1", [appel(A, 0, 25), appel(B, 335, 395)], enregistre=0))
         t = calculer_trains(r, T0 + timedelta(seconds=180), distance, localiser, nom)[0]
         self.assertEqual(t["course"], "T1")
         self.assertEqual(t["etat"], Etat.EN_ROUTE.value)
         self.assertEqual((t["gare"], t["gare_suivante"]), ("Gare A", "Gare B"))
-        self.assertAlmostEqual(t["lat"], 48.5)        # f = (180-60)/(300-60) = 0,5
+        self.assertAlmostEqual(t["lat"], 48.5)        # f = (180-25)/(335-25) = 0,5
         self.assertEqual(t["cap"], 90.0)
         self.assertEqual(t["age_s"], 180)
         self.assertFalse(t["perime"])
@@ -102,8 +103,8 @@ class TestCalculerTrains(unittest.TestCase):
         self.assertLess(t1, t2)
 
     def test_a_quai(self):
-        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
-        t = calculer_trains(r, T0 + timedelta(seconds=30), distance, localiser, nom)[0]
+        r = releve_de(course("T1", [appel(A, 0, 25), appel(B, 335, 395)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=20), distance, localiser, nom)[0]
         self.assertEqual((t["etat"], t["gare"]), ("à quai", "Gare A"))
 
     def test_peri_apres_15_min(self):
@@ -140,19 +141,19 @@ class TestCalculerTrains(unittest.TestCase):
 
     def test_horaires_impossibles_vitesse_limitee_et_marquee(self):
         # 1 000 m en 10 s = 100 m/s : impossible. Affiché : au plus 33 m/s depuis le départ, train marqué incohérent.
-        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 70, 130)]))
-        t = calculer_trains(r, T0 + timedelta(seconds=65), distance, localiser, nom)[0]
+        r = releve_de(course("T1", [appel(A, 0, 25), appel(B, 35, 95)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=30), distance, localiser, nom)[0]
         self.assertTrue(t["horaires_incoherents"])
         self.assertAlmostEqual(t["vitesse_implicite_ms"], 100.0)
         self.assertAlmostEqual(t["lat"], 48 + 165.0 / 1000.0)        # localiser(): lat = 48 + distance/1000 ; 33 m/s × 5 s
         self.assertIsNotNone(t["motif_vitesse"])
 
     def test_horaires_normaux_non_modifies(self):
-        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
+        r = releve_de(course("T1", [appel(A, 0, 25), appel(B, 335, 395)]))
         t = calculer_trains(r, T0 + timedelta(seconds=180), distance, localiser, nom)[0]
         self.assertFalse(t["horaires_incoherents"])
-        self.assertAlmostEqual(t["lat"], 48.5)                       # inchangé : 1 000 m en 240 s = 4,2 m/s
-        self.assertAlmostEqual(t["vitesse_implicite_ms"], 1000 / 240)
+        self.assertAlmostEqual(t["lat"], 48.5)                       # inchangé : 1 000 m en 310 s = 3,2 m/s
+        self.assertAlmostEqual(t["vitesse_implicite_ms"], 1000 / 310)
 
     def test_juste_sous_la_limite_non_marque(self):
         r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 91, 200)]))
@@ -161,8 +162,8 @@ class TestCalculerTrains(unittest.TestCase):
 
     def test_duree_min_estimee_remplace_la_limite_unique(self):
         # 1 000 m en 60 s = 16,7 m/s : plausible pour la limite unique, mais la durée minimale estimée du tronçon est 120 s.
-        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 120, 180)]))
-        t = calculer_trains(r, T0 + timedelta(seconds=90), distance, localiser, nom,
+        r = releve_de(course("T1", [appel(A, 0, 25), appel(B, 85, 145)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=55), distance, localiser, nom,
                             duree_min=lambda a, b: (120.0, "estimée"))[0]
         self.assertTrue(t["horaires_incoherents"])
         self.assertTrue(t["correction_estimee"])
@@ -172,16 +173,16 @@ class TestCalculerTrains(unittest.TestCase):
         self.assertIn("correction estimée", t["motif_vitesse"])
 
     def test_duree_annoncee_au_dessus_du_minimum_non_modifiee(self):
-        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 180, 240)]))
-        t = calculer_trains(r, T0 + timedelta(seconds=90), distance, localiser, nom,
+        r = releve_de(course("T1", [appel(A, 0, 25), appel(B, 145, 205)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=55), distance, localiser, nom,
                             duree_min=lambda a, b: (120.0, "estimée"))[0]
         self.assertFalse(t["horaires_incoherents"])
         self.assertFalse(t["correction_estimee"])
         self.assertAlmostEqual(t["lat"], 48.25)                      # 30 s sur 120 s annoncées : 250 m, inchangé
 
     def test_troncon_inconnu_repli_plancher_33_ms(self):
-        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 70, 130)]))
-        t = calculer_trains(r, T0 + timedelta(seconds=65), distance, localiser, nom, duree_min=lambda a, b: None)[0]
+        r = releve_de(course("T1", [appel(A, 0, 25), appel(B, 35, 95)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=30), distance, localiser, nom, duree_min=lambda a, b: None)[0]
         self.assertTrue(t["horaires_incoherents"])
         self.assertAlmostEqual(t["lat"], 48 + 165.0 / 1000.0)        # comme avant : 33 m/s x 5 s
         self.assertEqual(t["source_duree_min"], "plancher")
@@ -189,15 +190,15 @@ class TestCalculerTrains(unittest.TestCase):
 
     def test_duree_min_jamais_sous_le_plancher(self):
         # une table fautive qui donnerait 10 s pour 1 000 m ne doit pas relâcher la limite de 33 m/s
-        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 70, 130)]))
-        t = calculer_trains(r, T0 + timedelta(seconds=65), distance, localiser, nom,
+        r = releve_de(course("T1", [appel(A, 0, 25), appel(B, 35, 95)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=30), distance, localiser, nom,
                             duree_min=lambda a, b: (10.0, "estimée"))[0]
         self.assertAlmostEqual(t["duree_min_s"], 1000 / 33.0)
         self.assertAlmostEqual(t["lat"], 48 + 165.0 / 1000.0)
 
     def test_a_quai_pas_de_vitesse(self):
-        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
-        t = calculer_trains(r, T0 + timedelta(seconds=30), distance, localiser, nom)[0]
+        r = releve_de(course("T1", [appel(A, 0, 25), appel(B, 335, 395)]))
+        t = calculer_trains(r, T0 + timedelta(seconds=20), distance, localiser, nom)[0]
         self.assertFalse(t["horaires_incoherents"])
         self.assertFalse(t["correction_estimee"])
         self.assertIsNone(t["vitesse_implicite_ms"])
@@ -219,8 +220,8 @@ class TestCalculerTrains(unittest.TestCase):
         def espion(gare, suivante, distance_m):
             appels.append((gare, suivante, distance_m))
             return (48.0, 2.0, 45.0)
-        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360), appel(C, 600, 660)]))
-        calculer_trains(r, T0 + timedelta(seconds=30), distance, espion, nom)
+        r = releve_de(course("T1", [appel(A, 0, 25), appel(B, 335, 395), appel(C, 635, 695)]))
+        calculer_trains(r, T0 + timedelta(seconds=20), distance, espion, nom)
         self.assertEqual(appels[0], (A, B, 0.0))   # 1er appel = position actuelle ; les suivants sont les points d'incertitude
 
     def test_a_quai_au_terminus_pas_de_gare_suivante(self):
@@ -260,17 +261,17 @@ class TestCalculerTrains(unittest.TestCase):
 
     # --- incertitude : chemin le long des rails entre t - delta et t + delta (J2 bis : médiane 44 s, 90e centile 117 s) ---
     def _en_route(self, secondes=180):
-        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)], enregistre=0))
+        r = releve_de(course("T1", [appel(A, 0, 25), appel(B, 335, 395)], enregistre=0))
         return calculer_trains(r, T0 + timedelta(seconds=secondes), distance, localiser, nom)[0]
 
     def test_incertitude_deltas_et_extremites(self):
         inc = self._en_route()["incertitude"]
         self.assertEqual((inc["mediane_s"], inc["p90_s"]), (44.0, 117.0))
-        # f = (t - 60) / 240 ; lat = 48 + f ; t = 180 : médiane 136 s -> 224 s, p90 63 s -> 297 s
-        self.assertAlmostEqual(inc["mediane"][0][0], 48 + 76 / 240)
-        self.assertAlmostEqual(inc["mediane"][-1][0], 48 + 164 / 240)
-        self.assertAlmostEqual(inc["p90"][0][0], 48 + 3 / 240)
-        self.assertAlmostEqual(inc["p90"][-1][0], 48 + 237 / 240)
+        # f = (t - 25) / 310 ; lat = 48 + f ; t = 180 : médiane 136 s -> 224 s, p90 63 s -> 297 s
+        self.assertAlmostEqual(inc["mediane"][0][0], 48 + 111 / 310)
+        self.assertAlmostEqual(inc["mediane"][-1][0], 48 + 199 / 310)
+        self.assertAlmostEqual(inc["p90"][0][0], 48 + 38 / 310)
+        self.assertAlmostEqual(inc["p90"][-1][0], 48 + 272 / 310)
         self.assertGreaterEqual(len(inc["p90"]), 20)   # échantillonnage dense : la droite entre deux points ne coupe pas un virage
 
     def test_incertitude_chemin_ordonne_et_contient_la_position_actuelle(self):
@@ -292,8 +293,8 @@ class TestCalculerTrains(unittest.TestCase):
             self.assertIn(pt, inc["p90"])
 
     def test_incertitude_point_non_calculable_omis_jamais_invente(self):
-        # à t = 30 s (à quai en A, 1re arrivée à 0 s), t - 44 s et t - 117 s tombent avant la 1re gare : omis
-        t = self._en_route(30)
+        # à t = 20 s (à quai en A, 1re arrivée à 0 s), t - 44 s et t - 117 s tombent avant la 1re gare : omis
+        t = self._en_route(20)
         chemin = t["incertitude"]["p90"]
         self.assertTrue(chemin)
         self.assertTrue(all(pt[0] >= 48.0 for pt in chemin))
@@ -304,7 +305,7 @@ class TestCalculerTrains(unittest.TestCase):
             if distance_m > 600:
                 raise ValueError("hors tracé")
             return localiser(gare, suivante, distance_m)
-        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)], enregistre=0))
+        r = releve_de(course("T1", [appel(A, 0, 25), appel(B, 335, 395)], enregistre=0))
         t = calculer_trains(r, T0 + timedelta(seconds=180), distance, limite, nom)[0]
         chemin = t["incertitude"]["p90"]
         self.assertTrue(chemin and all(pt[0] <= 48.6 for pt in chemin))
@@ -334,9 +335,9 @@ class TestCalculerTrains(unittest.TestCase):
 
     def test_incertitude_utilise_la_correction_de_duree(self):
         # 1 000 m annoncés en 60 s (100 m/s) : corrigé à 120 s ; le chemin suit la position corrigée, pas la position brute
-        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 120, 180)], enregistre=0))
+        r = releve_de(course("T1", [appel(A, 0, 25), appel(B, 85, 145)], enregistre=0))
         corr = lambda a, b: (120.0, "estimée")
-        t = calculer_trains(r, T0 + timedelta(seconds=90), distance, localiser, nom, duree_min=corr)[0]
+        t = calculer_trains(r, T0 + timedelta(seconds=55), distance, localiser, nom, duree_min=corr)[0]
         brut = 48 + (30 / 60)    # sans correction : f = 0,5
         self.assertLess(t["lat"], brut)
         self.assertTrue(any(abs(pt[0] - t["lat"]) < 1e-9 for pt in t["incertitude"]["p90"]))
@@ -356,6 +357,119 @@ class TestCalculerTrains(unittest.TestCase):
 
     def test_incertitude_serialisable_en_json(self):
         json.dumps(self._en_route())
+
+
+class TestLissageDansLeServeur(unittest.TestCase):
+    """Étape 3 du plan séjour à quai : une révision de PRIM ne fait pas sauter le train (rerb/lissage.py)."""
+
+    def trains(self, releve, t, lisseur=None):
+        return calculer_trains(releve, T0 + timedelta(seconds=t), distance, localiser, nom, lisseur=lisseur)
+
+    def test_premiere_observation_identique_a_sans_lisseur(self):
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
+        self.assertEqual(self.trains(r, 150, Lisseur(tolerance_s=30.0, biais_s=0.0)), self.trains(r, 150))
+
+    def test_revision_de_90_s_ne_fait_pas_sauter_le_train(self):
+        r1 = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
+        r2 = releve_de(course("T1", [appel(A, 0, 60), appel(B, 390, 450)]))
+        l = Lisseur(tolerance_s=30.0, biais_s=0.0)
+        self.trains(r1, 140, l)
+        avant = self.trains(r1, 150)[0]["lat"]
+        brut = self.trains(r2, 150)[0]["lat"]
+        lisse = self.trains(r2, 150, l)[0]["lat"]
+        self.assertGreater(abs(brut - avant), 0.1)        # sans lissage, le train recule de plus de 100 m
+        self.assertLess(abs(lisse - avant), 0.01)         # avec : moins de 10 m
+        self.assertLess(self.trains(r2, 150, l)[0]["lat"] - 48.0, 1.0)
+
+    def test_l_incertitude_suit_le_train_lisse(self):
+        r1 = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
+        r2 = releve_de(course("T1", [appel(A, 0, 60), appel(B, 390, 450)]))
+        l = Lisseur(tolerance_s=30.0, biais_s=0.0)
+        self.trains(r1, 140, l)
+        t = self.trains(r2, 150, l)[0]
+        self.assertTrue(any(abs(pt[0] - t["lat"]) < 1e-9 for pt in t["incertitude"]["p90"]))
+
+    def test_course_absente_du_releve_est_oubliee(self):
+        l = Lisseur(tolerance_s=30.0, biais_s=0.0)
+        self.trains(releve_de(course("T1", [appel(A, 0, 60), appel(B, 3000, 3060)])), 10, l)
+        self.trains(releve_de(course("T2", [appel(A, 0, 60), appel(B, 3000, 3060)])), 20, l)
+        # T1 revient avec une heure révisée : elle repart de la valeur PRIM (mémoire purgée), pas d'une rampe
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 3090, 3150)]))
+        self.assertEqual(self.trains(r, 30, l), self.trains(r, 30))
+
+    def test_le_serveur_http_utilise_un_lisseur(self):
+        dossier = tempfile.TemporaryDirectory()
+        self.addCleanup(dossier.cleanup)
+        f = Fausse([livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))])
+        releveur = Releveur(f, Plafond(Path(dossier.name) / "p.json", 1000, lambda: date(2026, 11, 16)), intervalle_s=120)
+        maintenant = T0 + timedelta(seconds=180)
+        l = Lisseur(tolerance_s=30.0, biais_s=0.0)
+        serveur = creer_serveur(releveur, distance, localiser, nom, port=0, horloge=lambda: maintenant, lisseur=l)
+        threading.Thread(target=serveur.serve_forever, daemon=True).start()
+        self.addCleanup(serveur.server_close)
+        self.addCleanup(serveur.shutdown)
+        urllib.request.urlopen(f"http://127.0.0.1:{serveur.server_address[1]}/trains").read()
+        self.assertTrue(l.modifie("T1") is False and l.suivi_s("T1") == 0.0)   # la course est connue du lisseur de ce serveur (un seul relevé : suivi nul)
+        self.assertEqual(l.adoptee("T1", B), T0 + timedelta(seconds=300))
+
+
+class TestEtiquettes(unittest.TestCase):
+    """Étape 4 du plan : « périmé » est remplacé par deux faits distincts (décision de Mathis, 18/11)."""
+
+    def trains(self, releve, t, lisseur=None):
+        return calculer_trains(releve, T0 + timedelta(seconds=t), distance, localiser, nom, lisseur=lisseur)[0]
+
+    def test_donnees_anciennes_remplace_perime_sans_changer_le_seuil(self):
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 3000, 3060)]), recu=0)
+        for t_s, attendu in ((900, False), (901, True)):          # seuil de 15 min, strict
+            t = self.trains(r, t_s)
+            self.assertEqual(t["donnees_anciennes"], attendu)
+            self.assertEqual(t["perime"], attendu, "ancien champ conservé un temps pour la compatibilité")
+
+    def _suivi(self, vise_dep_b=360, jusqu_a=700, retard_b=0):
+        """Un relevé toutes les 120 s (avec la même heure estimée) jusqu'à `jusqu_a` ; renvoie le dernier train calculé."""
+        l, t = Lisseur(tolerance_s=30.0, biais_s=0.0), None
+        for recu in list(range(0, jusqu_a, 120)) + [jusqu_a]:
+            r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 3000 + retard_b, 3060 + retard_b, vise_arr=3000, vise_dep=vise_dep_b + 2700)]), recu=recu)
+            t = self.trains(r, recu, l)
+        return t
+
+    def test_horaire_theorique_apres_10_min_sans_aucun_ecart(self):
+        self.assertTrue(self._suivi(jusqu_a=700)["horaire_theorique"])
+
+    def test_pas_d_etiquette_avant_10_min_d_observation(self):
+        self.assertFalse(self._suivi(jusqu_a=599)["horaire_theorique"])
+
+    def test_pas_d_etiquette_si_prim_annonce_un_retard(self):
+        self.assertFalse(self._suivi(retard_b=120)["horaire_theorique"])
+
+    def test_pas_d_etiquette_si_prim_a_deja_modifie_une_heure(self):
+        r1 = releve_de(course("T1", [appel(A, 0, 60), appel(B, 3000, 3060)]), recu=0)
+        r2 = releve_de(course("T1", [appel(A, 0, 60), appel(B, 3010, 3070, vise_arr=3010, vise_dep=3070)]), recu=120)
+        l = Lisseur(tolerance_s=30.0, biais_s=0.0)
+        self.trains(r1, 0, l)
+        self.trains(r2, 120, l)                                    # PRIM a bougé de 10 s : il y a du temps réel sur ce train
+        r3 = releve_de(course("T1", [appel(A, 0, 60), appel(B, 3010, 3070, vise_arr=3010, vise_dep=3070)]), recu=700)
+        self.assertFalse(self.trains(r3, 700, l)["horaire_theorique"])
+
+    def test_pas_d_etiquette_sur_un_releve_fige(self):
+        # PRIM tombe : le même relevé (recu = 0) est servi pendant 700 s ; aucune étiquette « Horaire théorique »
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 3000, 3060)]), recu=0)
+        l = Lisseur(tolerance_s=30.0, biais_s=0.0)
+        for t_s in range(0, 701, 60):
+            t = self.trains(r, t_s, l)
+        self.assertFalse(t["horaire_theorique"])
+
+    def test_pas_d_etiquette_sans_lisseur(self):
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 3000, 3060)]))
+        self.assertFalse(self.trains(r, 700)["horaire_theorique"])
+
+    def test_les_deux_etiquettes_sont_independantes(self):
+        l, t = Lisseur(tolerance_s=30.0, biais_s=0.0), None
+        for recu in (0, 120, 240, 360, 480, 600, 700):             # 700 s de relevés distincts, heures PRIM inchangées
+            r = Releve(T0 + timedelta(seconds=recu), releve_de(course("T1", [appel(A, 0, 60), appel(B, 3000, 3060)])).trains)
+            t = self.trains(r, 1000 if recu == 700 else recu, l)
+        self.assertTrue(t["donnees_anciennes"] and t["horaire_theorique"])   # course enregistrée à 0 s, vue à 1 000 s : anciennes ET horaire inchangé
 
 
 class TestPlafond(unittest.TestCase):
@@ -760,8 +874,8 @@ class TestContexteReel(unittest.TestCase):
         for t in (en_route, a_quai):
             self.assertIsNotNone(t["cap"], t["motif"])
             self.assertTrue(0.0 <= t["cap"] < 360.0)
-        # à quai, la rame est posée SUR la voie (pas au centre de la gare) : pas de saut quand elle démarre
-        un_metre = calculer_trains(r, T0 + timedelta(seconds=60 + 240 / 300.0), distance_, localiser_, nom_)[0]
+        # à quai, la rame est posée SUR la voie (pas au centre de la gare) : pas de saut quand elle démarre (gare dense : départ à 30 s)
+        un_metre = calculer_trains(r, T0 + timedelta(seconds=30 + 270 / 300.0), distance_, localiser_, nom_)[0]
         ecart = math.hypot((un_metre["lon"] - a_quai["lon"]) * 74000, (un_metre["lat"] - a_quai["lat"]) * 111000)
         self.assertLess(ecart, 10.0, ecart)
         # Massy - Verrières est au nord-est de Massy - Palaiseau (+1 046 m vers le nord, +1 127 m vers l'est : cap direct ~47°)
@@ -808,6 +922,41 @@ class TestContinuiteAuxGares(unittest.TestCase):
             pires.append((max(self.metres(arrivee, quai), self.metres(quai, depart)), self.nom(gare)))
         pire = max(pires)
         self.assertLess(pire[0], 5.0, f"saut de {pire[0]:.0f} m à {pire[1]}")
+
+    def test_voie_autour_du_train_dans_le_sens_de_la_marche(self):
+        """La carte pose chaque caisse sur ce tracé : il doit passer par la position du train, aller dans le sens de la marche, sans trou."""
+        for a, b in zip(self.chaine[:6], self.chaine[1:7]):
+            longueur = self.distance(a, b)
+            for d in (0.0, 60.0, longueur / 2, longueur):
+                voie = self.localiser.voie(a, b, d)
+                lat, lon, cap = self.localiser(a, b, d)
+                self.assertGreaterEqual(len(voie), 2)
+                self.assertLess(min(self.metres((lat, lon), (y, x)) for x, y in voie), 8.0, "la position du train est sur le tracé")
+                pas = [self.metres((q[1], q[0]), (p[1], p[0])) for p, q in zip(voie, voie[1:])]
+                self.assertLessEqual(max(pas), 9.0, "un point tous les 8 m au plus : les courbes restent fines")
+                self.assertLessEqual(sum(pas), 2 * DEMI_VOIE_M + 10)
+            milieu = self.localiser.voie(a, b, longueur / 2)
+            (x0, y0), (x1, y1) = milieu[0], milieu[-1]
+            if self.metres((y0, x0), (y1, x1)) > 100:   # sens de la marche : le cap du train pointe du début vers la fin du tracé
+                cap_voie = math.degrees(math.atan2((x1 - x0) * 74, (y1 - y0) * 111)) % 360
+                self.assertLess(abs((cap_voie - self.localiser(a, b, longueur / 2)[2] + 180) % 360 - 180), 40)
+
+    def test_voie_absente_au_terminus(self):
+        self.assertIsNone(self.localiser.voie(self.chaine[-1], None, 0.0))
+
+    def test_calculer_trains_envoie_la_voie(self):
+        a, b = self.chaine[0], self.chaine[1]
+        voie_a_envoyer = [[2.0, 48.0], [2.001, 48.0]]
+        def loc(gare, suivante, distance_m):
+            return (48.0, 2.0, 90.0)
+        loc.voie = lambda gare, suivante, distance_m: voie_a_envoyer if suivante else None
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
+        en_route = calculer_trains(r, T0 + timedelta(seconds=150), distance, loc, nom)[0]
+        self.assertEqual(en_route["voie"], voie_a_envoyer)
+        terminus = calculer_trains(r, T0 + timedelta(seconds=330), distance, loc, nom)[0]
+        self.assertIsNone(terminus["voie"], "pas de tronçon au terminus : la carte garde la dernière voie")
+        sans = calculer_trains(r, T0 + timedelta(seconds=150), distance, lambda *x: (48.0, 2.0, 90.0), nom)[0]
+        self.assertIsNone(sans["voie"], "localiser sans voie : la rame sera droite")
 
     def test_terminus_au_meme_point_que_l_arrivee(self):
         a, b = self.chaine[-2], self.chaine[-1]

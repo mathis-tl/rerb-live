@@ -77,14 +77,15 @@ class TestBase(unittest.TestCase):
         self.assertAlmostEqual(e.distance_m, 1200.0)
 
     def test_2_en_route_deuxieme_troncon(self):
+        # B : arrêt annoncé 60 s ramené à 25 s (décision du 18/11) : départ 08:03:25, arrivée C inchangée 08:07:00
         e = ou(base(), "08:05:30")
         self.assertEqual(e.etat, Etat.EN_ROUTE)
         self.assertEqual((e.gare, e.gare_suivante), ("B", "C"))
-        self.assertAlmostEqual(e.fraction, 0.5)
-        self.assertAlmostEqual(e.distance_m, 1500.0)
+        self.assertAlmostEqual(e.fraction, 125 / 215)
+        self.assertAlmostEqual(e.distance_m, 3000.0 * 125 / 215)
 
     def test_3_a_quai(self):
-        e = ou(base(), "08:03:30")
+        e = ou(base(), "08:03:20")
         self.assertEqual(e.etat, Etat.A_QUAI)
         self.assertEqual(e.gare, "B")
         self.assertEqual(e.distance_m, 0.0)
@@ -94,8 +95,9 @@ class TestBase(unittest.TestCase):
         self.assertEqual((e.etat, e.gare), (Etat.A_QUAI, "B"))
 
     def test_5_borne_depart(self):
-        e = ou(base(), "08:04:00")
+        e = ou(base(), "08:03:25")   # arrivée 08:03:00 + séjour 25 s
         self.assertEqual((e.etat, e.gare), (Etat.A_QUAI, "B"))
+        self.assertEqual(ou(base(), "08:03:26").etat, Etat.EN_ROUTE)
 
     def test_6_pas_encore_parti(self):
         e = ou(base(), "07:59:00")
@@ -121,6 +123,114 @@ class TestBase(unittest.TestCase):
         t = base(C=passage("C", "08:07:00", "08:07:10"))
         self.assertEqual(ou(t, "08:07:10").etat, Etat.A_QUAI)
         self.assertEqual(ou(t, "08:07:11").etat, Etat.TERMINE)
+
+
+CHATELET = "STIF:StopArea:SP:45102:"     # gare dense (30 s)
+PALAISEAU = "STIF:StopArea:SP:47009:"    # gare ordinaire (25 s)
+
+
+def dist3000(a, b):
+    return 3000.0
+
+
+def train_ligne(gare, arrivee, depart):
+    """Origine X (départ 08:00:00) -> `gare` (arrivée, départ) -> terminus Z (arrivée 08:10:00)."""
+    return Train([passage("X", None, "08:00:00"), passage(gare, arrivee, depart), passage("Z", "08:10:00", None)], h("08:01:00"))
+
+
+class TestSejourQuai(unittest.TestCase):
+    """Décisions de Mathis (18/11) : séjour à quai 25 s (30 s en gare dense) ; PRIM annonce 63 à 77 s, mesuré 17 à 32 s."""
+
+    def etat(self, train, t):
+        return estimer(train, h(t), dist3000)
+
+    def test_arret_annonce_63_s_devient_25_s(self):
+        t = train_ligne(PALAISEAU, "08:03:00", "08:04:03")
+        self.assertEqual(self.etat(t, "08:03:25").etat, Etat.A_QUAI)
+        e = self.etat(t, "08:03:26")
+        self.assertEqual((e.etat, e.gare, e.gare_suivante), (Etat.EN_ROUTE, PALAISEAU, "Z"))
+
+    def test_gare_dense_77_s_devient_30_s(self):
+        t = train_ligne(CHATELET, "08:03:00", "08:04:17")
+        self.assertEqual(self.etat(t, "08:03:30").etat, Etat.A_QUAI)
+        self.assertEqual(self.etat(t, "08:03:31").etat, Etat.EN_ROUTE)
+
+    def test_toutes_les_gares_denses_decidees(self):
+        for numero in ("45102", "462394", "44877", "43833", "58774", "462398", "473364"):
+            t = train_ligne(f"STIF:StopArea:SP:{numero}:", "08:03:00", "08:04:17")
+            self.assertEqual(self.etat(t, "08:03:30").etat, Etat.A_QUAI, numero)
+            self.assertEqual(self.etat(t, "08:03:31").etat, Etat.EN_ROUTE, numero)
+        self.assertEqual(sorted(position.GARES_DENSES), sorted(["45102", "462394", "44877", "43833", "58774", "462398", "473364"]))
+
+    def test_gare_ordinaire_pas_dense(self):
+        t = train_ligne(PALAISEAU, "08:03:00", "08:04:17")
+        self.assertEqual(self.etat(t, "08:03:26").etat, Etat.EN_ROUTE)
+
+    def test_arret_plus_court_que_le_sejour_inchange(self):
+        t = train_ligne(PALAISEAU, "08:03:00", "08:03:15")
+        self.assertEqual(self.etat(t, "08:03:15").etat, Etat.A_QUAI)
+        self.assertEqual(self.etat(t, "08:03:16").etat, Etat.EN_ROUTE)
+
+    def test_arret_egal_au_sejour_inchange(self):
+        t = train_ligne(PALAISEAU, "08:03:00", "08:03:25")
+        self.assertEqual(self.etat(t, "08:03:25").etat, Etat.A_QUAI)
+        self.assertEqual(self.etat(t, "08:03:26").etat, Etat.EN_ROUTE)
+
+    def test_arret_au_plafond_est_raccourci_au_dela_inchange(self):
+        # 120 s : encore raccourci ; 121 s et 180 s : vraie retenue annoncée par PRIM (arrêts normaux observés le 18/11 : 97 s au plus), on ne touche pas
+        t120 = train_ligne(PALAISEAU, "08:03:00", "08:05:00")
+        self.assertEqual(self.etat(t120, "08:03:26").etat, Etat.EN_ROUTE)
+        for fin in ("08:05:01", "08:06:00", "08:07:00"):
+            t = train_ligne(PALAISEAU, "08:03:00", fin)
+            self.assertEqual(self.etat(t, "08:03:26").etat, Etat.A_QUAI, fin)   # toujours à quai : l'arrêt annoncé est conservé
+            self.assertEqual(self.etat(t, fin).etat, Etat.A_QUAI, fin)
+        self.assertEqual(position.ARRET_ANNONCE_MAX, timedelta(seconds=120))
+
+    def test_gare_inconnue_ou_sans_numero_prend_le_sejour_par_defaut(self):
+        t = train_ligne("B", "08:03:00", "08:04:00")
+        self.assertEqual(self.etat(t, "08:03:25").etat, Etat.A_QUAI)
+        self.assertEqual(self.etat(t, "08:03:26").etat, Etat.EN_ROUTE)
+
+    def test_terminus_et_origine_inchanges(self):
+        t = train_ligne(PALAISEAU, "08:03:00", "08:03:20")
+        self.assertEqual(self.etat(t, "08:10:00").gare, "Z")
+        self.assertEqual(self.etat(t, "08:11:00").etat, Etat.A_QUAI)   # 60 s au terminus
+        self.assertEqual(self.etat(t, "08:11:01").etat, Etat.TERMINE)
+        self.assertEqual(self.etat(t, "08:00:00").gare, "X")            # origine sans arrivée : à quai à son départ
+
+    def test_premier_passage_avec_arrivee_et_depart_est_raccourci_comme_une_gare_ordinaire(self):
+        # choix figé (revue du 18/11) : PRIM retire les gares déjà passées, la 1re gare de la liste est souvent intermédiaire ;
+        # une vraie origine qui annonce une arrivée ET un battement de 25 à 180 s est donc raccourcie aussi
+        t = Train([passage(PALAISEAU, "08:00:00", "08:01:03"), passage("Z", "08:10:00", None)], h("08:00:00"))
+        self.assertEqual(self.etat(t, "08:00:25").etat, Etat.A_QUAI)
+        self.assertEqual(self.etat(t, "08:00:26").etat, Etat.EN_ROUTE)
+
+    def test_terminus_avec_depart_annonce_long_inchange(self):
+        t = Train([passage("X", None, "08:00:00"), passage("Z", "08:10:00", "08:12:00")], h("08:01:00"))
+        self.assertEqual(self.etat(t, "08:12:00").etat, Etat.A_QUAI)
+
+    def test_drapeaux_reconstruit_et_repare_conserves(self):
+        t = Train([passage("X", None, "08:00:00"),
+                   Passage(PALAISEAU, h("08:03:00"), h("08:04:03"), reconstruit=True, repare=True),
+                   passage("Z", "08:10:00", None)], h("08:01:00"))
+        e = self.etat(t, "08:03:10")
+        self.assertEqual(e.etat, Etat.A_QUAI)
+        self.assertTrue(e.reconstruit and e.repare)
+        e = self.etat(t, "08:05:00")
+        self.assertTrue(e.reconstruit and e.repare)
+
+    def test_continuite_et_vitesse_recalee(self):
+        # départ raccourci : le train repart à 08:03:25 et arrive toujours à 08:10:00 (heure PRIM)
+        t = train_ligne(PALAISEAU, "08:03:00", "08:04:03")
+        e0 = self.etat(t, "08:03:26")
+        self.assertLess(e0.fraction, 0.01)
+        self.assertEqual(e0.duree_s, 395.0)                    # 08:03:25 -> 08:10:00 (avant : 357 s)
+        e_fin = self.etat(t, "08:09:59")
+        self.assertGreater(e_fin.fraction, 0.99)
+        avant = 3000.0 / 357.0
+        apres = e0.longueur_m / e0.duree_s
+        self.assertLess(apres, avant)                          # il roule moins vite pour arriver à l'heure PRIM
+        self.assertAlmostEqual(apres, 3000.0 / 395.0)
 
 
 class TestHeuresManquantesEtDesordre(unittest.TestCase):
@@ -158,7 +268,7 @@ class TestHeuresManquantesEtDesordre(unittest.TestCase):
             ]},
         }
         train = lire_train(ej)
-        self.assertEqual(ou(train, "08:03:30").etat, Etat.A_QUAI)  # B : heures théoriques
+        self.assertEqual(ou(train, "08:03:20").etat, Etat.A_QUAI)  # B : heures théoriques
         # C : estimée 08:07:00 (et non théorique 08:06:00)
         self.assertEqual(ou(train, "08:06:30").etat, Etat.EN_ROUTE)
         self.assertEqual(ou(train, "08:07:00").etat, Etat.A_QUAI)
@@ -194,9 +304,14 @@ class TestRefus(unittest.TestCase):
         self.assertIn(morceau_motif, e.motif)
 
     def test_12_heures_incoherentes_chevauchement(self):
-        # C arrive à 08:03:30 alors que B ne part qu'à 08:04:00
-        t = base(C=passage("C", "08:03:30", None))
+        # C arrive à 08:03:10 : avant même la fin du séjour de B (arrivée 08:03:00 + 25 s)
+        t = base(C=passage("C", "08:03:10", None))
         self.assertNonPlace(ou(t, "08:01:30"), "incohérentes")
+
+    def test_12c_chevauchement_absorbe_par_le_sejour_raccourci(self):
+        # C arrive à 08:03:30 alors que PRIM annonçait B partant à 08:04:00 : avec le départ recalculé (08:03:25) il n'y a plus de chevauchement
+        t = base(C=passage("C", "08:03:30", None))
+        self.assertEqual(ou(t, "08:01:30").etat, Etat.EN_ROUTE)
 
     def test_12b_heures_incoherentes_depart_avant_arrivee(self):
         # B part à 08:02:00 avant d'être arrivé (08:03:00)

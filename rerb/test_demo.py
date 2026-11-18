@@ -5,7 +5,7 @@ Sert à voir la carte sans appeler PRIM. Les données sont fausses par construct
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from demo import livraison_demo, stop_monitoring_demo
+from demo import PAS_REVISION_S, livraison_demo, stop_monitoring_demo
 from gare import lire_passages
 from memoire import Memoire
 from position import Etat, estimer
@@ -110,3 +110,73 @@ class TestStopMonitoringDemo(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _arrivees(liv):
+    """{(course, gare): (arrivée, départ)} d'une livraison de démonstration (sans le train annulé, dont l'horaire suit l'instant présent)."""
+    sortie = {}
+    for ej in liv["EstimatedTimetableDelivery"][0]["EstimatedJourneyVersionFrame"][0]["EstimatedVehicleJourney"]:
+        if ej["DatedVehicleJourneyRef"] == "DEMO-ANNULE":
+            continue
+        for c in ej["EstimatedCalls"]:
+            sortie[(ej["DatedVehicleJourneyRef"], c["StopPointRef"]["value"])] = (c["ExpectedArrivalTime"], c["ExpectedDepartureTime"])
+    return sortie
+
+
+def _s(texte):
+    return datetime.fromisoformat(texte.replace("Z", "+00:00"))
+
+
+class TestRevisionsDemo(unittest.TestCase):
+    """`revisions=True` : PRIM « révise » les heures d'arrivée à venir (±45 s, parfois +150 s), pour juger le rendu du lissage à l'œil."""
+
+    def liv(self, t, revisions=True):
+        return livraison_demo(t, CHAINE, distance, nombre=12, revisions=revisions)
+
+    def test_sans_revisions_rien_ne_change(self):
+        self.assertEqual(_arrivees(livraison_demo(T, CHAINE, distance, nombre=12)), _arrivees(self.liv(T, revisions=False)))
+
+    def test_deterministe_et_stable_dans_une_fenetre(self):
+        self.assertEqual(_arrivees(self.liv(T)), _arrivees(self.liv(T)))
+        self.assertEqual(_arrivees(self.liv(T)), _arrivees(self.liv(T + timedelta(seconds=PAS_REVISION_S // 2 - 1))))
+
+    def test_des_revisions_apparaissent_d_une_fenetre_a_l_autre(self):
+        a, b = _arrivees(self.liv(T)), _arrivees(self.liv(T + timedelta(seconds=PAS_REVISION_S)))
+        ecarts = [abs((_s(a[k][0]) - _s(b[k][0])).total_seconds()) for k in a if k in b and _s(a[k][0]) > T + timedelta(seconds=120)]
+        self.assertGreater(sum(e > 15 for e in ecarts), len(ecarts) // 4)   # beaucoup de révisions de plus de 15 s
+        self.assertLessEqual(max(ecarts), 45 * 2 + 150 + 1)
+
+    def test_les_arrivees_passees_ne_sont_pas_touchees(self):
+        base, rev = _arrivees(self.liv(T, revisions=False)), _arrivees(self.liv(T))
+        for k, (arr, dep) in base.items():
+            if _s(arr) <= T:
+                self.assertEqual(rev[k], (arr, dep), k)
+
+    def test_le_sejour_annonce_est_conserve(self):
+        base, rev = _arrivees(self.liv(T, revisions=False)), _arrivees(self.liv(T))
+        for k in base:
+            self.assertEqual(_s(base[k][1]) - _s(base[k][0]), _s(rev[k][1]) - _s(rev[k][0]), k)
+
+    def test_un_gros_retard_de_150_s_survient_sur_certains_trains(self):
+        base = _arrivees(self.liv(T, revisions=False))
+        gros = set()
+        for k in range(0, 40):
+            t = T + timedelta(seconds=PAS_REVISION_S * k)
+            rev, base = _arrivees(self.liv(t)), _arrivees(self.liv(t, revisions=False))
+            gros |= {k2[0] for k2 in rev if _s(rev[k2][0]) - _s(base[k2][0]) >= timedelta(seconds=105)}
+        self.assertTrue(gros)
+
+    def test_les_trains_restent_places(self):
+        for k in range(0, 60):
+            t = T + timedelta(seconds=PAS_REVISION_S * k)
+            for ref, (train, _) in consolider_livraison(self.liv(t), Memoire()).items():
+                if "ANNULE" in ref:
+                    continue
+                self.assertNotEqual(estimer(train, t, distance).etat, Etat.NON_PLACE, (ref, k))
+
+    def test_stop_monitoring_suit_les_memes_revisions(self):
+        sm = stop_monitoring_demo(T, CHAINE[2], CHAINE, distance, lambda r: r, nombre=12, revisions=True)
+        rev = _arrivees(self.liv(T))
+        for v in sm["StopMonitoringDelivery"][0]["MonitoredStopVisit"]:
+            mvj = v["MonitoredVehicleJourney"]
+            self.assertEqual(mvj["MonitoredCall"]["ExpectedArrivalTime"], rev[(mvj["FramedVehicleJourneyRef"]["DatedVehicleJourneyRef"], CHAINE[2])][0])

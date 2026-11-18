@@ -19,7 +19,8 @@ const MASSY = { longitude: 2.2588, latitude: 48.7255 };
 let geo = null, trains = [], statut = null, mode = "mixte", zoom = 9, pasZoom = 90, filtreDirection = "nord", groupeOuvert = null, groupes = new Map(), selection = null, gareChoisie = "58774", dernierePrevision = null;
 
 // --- Modèles 3D de la rame Z 8100 (web/modele-z8100.js, cotes de la fiche) : détaillé de près, « icône » (style Waze / Google Maps) de loin.
-const MODELES = { detail: ModeleZ8100.construire(), icone: ModeleZ8100.construire({ icone: true }) };
+// De près : deux maillages de caisse (motrice, remorque), posés chacun sur la voie ; la rame se plie dans les courbes. De loin : l'icône, rigide.
+const MODELES = { motrice: ModeleZ8100.construire({ voiture: 0 }), remorque: ModeleZ8100.construire({ voiture: 1 }), icone: ModeleZ8100.construire({ icone: true }) };
 
 // --- échelle du train
 // De près (zoom >= ZOOM_DETAIL) : modèle détaillé à la taille réelle. De loin : modèle icône (rame élargie et rehaussée une fois pour toutes),
@@ -86,7 +87,21 @@ function suggestionsGares(gares, saisie, max = 8) {
 // --- fin recherche de gare
 
 // --- Couleur et orientation
-const couleurTrain = t => (t.perime ? GRIS : t.terminus ? ROUGE_TERMINUS : (COULEURS[t.etat] || GRIS));
+const couleurTrain = t => (t.donnees_anciennes ? GRIS : t.terminus ? ROUGE_TERMINUS : (COULEURS[t.etat] || GRIS));
+// --- etiquettes
+// Deux faits distincts, jamais confondus (l'ancien mot, trompeur, a été remplacé le 18/11) :
+//  • « Données anciennes » : PRIM n'a pas mis à jour ce train depuis plus de 15 min (certain) ; position extrapolée de la dernière estimation ; couleur grise ;
+//  • « Horaire théorique » : l'heure affichée est celle de l'horaire, PRIM n'annonce aucun écart (indicatif : un train à l'heure donne le même résultat) ; aucune couleur d'alerte.
+const NOTE_DONNEES_ANCIENNES = "pas de nouvelle information de PRIM sur ce train depuis plus de 15 min ; sa position est extrapolée à partir de la dernière estimation connue.";
+const NOTE_HORAIRE_THEORIQUE = "l'heure affichée est celle de l'horaire ; PRIM n'annonce aucun écart à la prochaine gare : soit le train est à l'heure, soit PRIM ne suit pas ce train en temps réel.";
+function etiquettes(t) {
+  const liste = [];
+  if (t.donnees_anciennes) liste.push({ libelle: "Données anciennes", note: NOTE_DONNEES_ANCIENNES });
+  if (t.horaire_theorique) liste.push({ libelle: "Horaire théorique", note: NOTE_HORAIRE_THEORIQUE });
+  return liste;
+}
+const suffixeEtiquettes = t => etiquettes(t).map(e => " (" + e.libelle.toLowerCase() + ")").join("");
+// --- fin etiquettes
 // cap serveur : degrés, 0 = nord, sens horaire. Orientation deck.gl : [tangage, lacet, roulis], lacet antihoraire depuis l'est.
 const orientation = t => [0, 90 - (t.cap == null ? 0 : t.cap), 0];
 
@@ -131,10 +146,11 @@ function majAffiches(maintenant) {
     presents.add(t.course);
     const e = affiches.get(t.course);
     const vers = [t.lon, t.lat, capOuPrecedent(t.cap, e ? e.vers[2] : null)];
-    if (!e) { affiches.set(t.course, { de: vers, vers, t0: maintenant, duree: 0 }); return; }
+    if (!e) { affiches.set(t.course, { de: vers, vers, t0: maintenant, duree: 0, voie: t.voie }); return; }
     const [lon, lat, cap] = positionAffichee(e, maintenant);
     const saut = metres([lon, lat], vers);
     e.de = [lon, lat, cap]; e.vers = vers; e.t0 = maintenant;
+    if (t.voie) e.voie = t.voie;   // au terminus le serveur n'en envoie plus : on garde la dernière
     e.duree = saut > SEUIL_CORRECTION_M ? Math.min(DUREE_CORRECTION_MAX_MS, saut / 50 * 1000) : INTERVALLE_MS;
   });
   for (const c of [...affiches.keys()]) if (!presents.has(c)) affiches.delete(c);
@@ -146,7 +162,7 @@ function placesAffiches(maintenant) {
     const e = affiches.get(t.course);
     if (!e) return t;
     const [lon, lat, cap] = positionAffichee(e, maintenant);
-    return { ...t, lon, lat, cap };
+    return { ...t, lon, lat, cap, voie: e.voie || t.voie };
   });
 }
 
@@ -270,16 +286,88 @@ const COULEUR_NOM = { clair: { texte: [20, 30, 40, 255], contour: [255, 255, 255
 const couleurNomGare = () => COULEUR_NOM[sombre.matches ? "sombre" : "clair"];
 // --- fin noms de gares
 
+// --- voitures
+// Rame articulée : chaque caisse est posée sur la voie du train (tracé envoyé par le serveur, dans le sens de la marche) comme sur ses deux bogies :
+// le centre de la caisse est le milieu des deux pivots (à ±9,25 m du centre), son cap est la direction de la corde entre eux. En courbe, la rame se plie ;
+// en ligne droite le résultat est identique à la rame rigide. Rang 0 = motrice de tête, 1 et 2 = remorques, 3 = motrice de queue.
+const CENTRES_VOITURES_M = [39.0125, 13, -13, -39.0125];   // abscisse du centre de chaque caisse depuis le centre de la rame (tête devant)
+const DEMI_PIVOTS_M = 9.25;                                 // les pivots de bogie sont à 18,5 m l'un de l'autre
+const echellesLocales = lat => [111320 * Math.cos(lat * Math.PI / 180), 110540];   // mètres par degré de longitude et de latitude
+
+// Rame droite de repli (pas de voie connue : terminus, serveur sans tracé) : voie fictive de 400 m dans la direction du cap.
+function voieDroite(lon, lat, cap) {
+  const [kx, ky] = echellesLocales(lat), a = (cap || 0) * Math.PI / 180;
+  return [[lon - Math.sin(a) * 200 / kx, lat - Math.cos(a) * 200 / ky], [lon + Math.sin(a) * 200 / kx, lat + Math.cos(a) * 200 / ky]];
+}
+
+// voie : [[lon, lat], ...] dans le sens de la marche ; (lon, lat) : centre de la rame (projeté sur la voie, prolongée en ligne droite aux deux bouts).
+// Renvoie les 4 caisses : [{ lon, lat, cap }] (cap en degrés, 0 = nord, sens horaire), ou null si la voie est inutilisable.
+function voituresSurVoie(voie, lon, lat) {
+  if (!voie || voie.length < 2) return null;
+  const [kx, ky] = echellesLocales(lat);
+  const P = voie.map(([x, y]) => [(x - lon) * kx, (y - lat) * ky]);
+  const cum = [0];
+  for (let i = 1; i < P.length; i++) cum.push(cum[i - 1] + Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]));
+  if (!(cum[cum.length - 1] > 0)) return null;
+  const dernier = P.length - 2;
+  let s0 = 0, meilleur = Infinity;
+  for (let i = 0; i <= dernier; i++) {   // projection de l'origine sur chaque segment ; les deux segments d'extrémité sont prolongés
+    const ex = P[i + 1][0] - P[i][0], ey = P[i + 1][1] - P[i][1], L2 = ex * ex + ey * ey;
+    if (!(L2 > 0)) continue;
+    let t = (-P[i][0] * ex - P[i][1] * ey) / L2;
+    if (i > 0) t = Math.max(0, t);
+    if (i < dernier) t = Math.min(1, t);
+    const d = Math.hypot(P[i][0] + t * ex, P[i][1] + t * ey);
+    if (d < meilleur) { meilleur = d; s0 = cum[i] + t * Math.sqrt(L2); }
+  }
+  const total = cum[cum.length - 1];
+  const point = s => {
+    let i = 0;
+    if (s >= total) i = dernier; else if (s > 0) while (i < dernier && cum[i + 1] < s) i++;
+    const L = cum[i + 1] - cum[i] || 1, u = (s - cum[i]) / L;   // u < 0 ou > 1 : prolongement droit
+    return [P[i][0] + (P[i + 1][0] - P[i][0]) * u, P[i][1] + (P[i + 1][1] - P[i][1]) * u];
+  };
+  return CENTRES_VOITURES_M.map(c => {
+    const [ax, ay] = point(s0 + c - DEMI_PIVOTS_M), [bx, by] = point(s0 + c + DEMI_PIVOTS_M);
+    return { lon: lon + (ax + bx) / 2 / kx, lat: lat + (ay + by) / 2 / ky, cap: (Math.atan2(bx - ax, by - ay) * 180 / Math.PI + 360) % 360 };
+  });
+}
+
+// Les caisses de tous les trains : un objet par caisse, avec les champs du train (clic, info-bulle, couleur) et son rang.
+function voitures(p) {
+  return p.flatMap(t => {
+    const caisses = voituresSurVoie(t.voie, t.lon, t.lat) || voituresSurVoie(voieDroite(t.lon, t.lat, t.cap), t.lon, t.lat);
+    return caisses.map((c, rang) => ({ ...t, ...c, rang }));
+  });
+}
+// Les maillages sont orientés tête en +x ; la caisse 2 est la remorque tournée de 180°, la caisse 3 la motrice tournée de 180°.
+const orientationVoiture = d => [0, 90 - d.cap + (d.rang >= 2 ? 180 : 0), 0];
+// --- fin voitures
+
 // Couches d'un niveau de modèle (détaillé ou icône) : une couche par pièce (couleur). L'icône a un disque dessous, coloré selon l'état du train ;
 // les vitres du modèle détaillé sont semi-transparentes et dessinées en dernier sans écrire la profondeur.
 function calquesTrains(p, ech, couleurAlpha) {
-  const modele = ech.detail ? MODELES.detail : MODELES.icone, niveau = ech.detail ? "detail" : "icone";
-  const echelle = () => [ech.longueur, ech.largeur, ech.largeur];
   const matiere = { ambient: 0.55, diffuse: 0.65, shininess: 24, specularColor: [90, 90, 90] };
-  return modele.pieces.map(piece => {
+  if (ech.detail) {   // de près : une couche par pièce et par type de caisse, chaque caisse posée sur la voie
+    const caisses = voitures(p);
+    return [["motrice", d => d.rang === 0 || d.rang === 3], ["remorque", d => d.rang === 1 || d.rang === 2]].flatMap(([type, est]) => {
+      const donnees = caisses.filter(est);
+      return MODELES[type].pieces.map(piece => {
+        const vitre = piece.nom === "vitre";
+        return new deck.SimpleMeshLayer({
+          id: `trains-detail-${type}-${piece.nom}`, data: donnees, mesh: piece.maillage, getPosition: d => [d.lon, d.lat, 0],
+          getColor: d => [...piece.couleur, Math.round((vitre ? 90 : 255) * d.alpha)],
+          getOrientation: orientationVoiture, sizeScale: 1, pickable: !vitre, material: matiere,
+          parameters: vitre ? { depthWriteEnabled: false } : undefined,
+        });
+      });
+    });
+  }
+  const echelle = () => [ech.longueur, ech.largeur, ech.largeur];   // de loin : icône rigide, agrandie
+  return MODELES.icone.pieces.map(piece => {
     const vitre = piece.nom === "vitre", disque = piece.nom === "disque";
     return new deck.SimpleMeshLayer({
-      id: `trains-${niveau}-${piece.nom}`, data: p, mesh: piece.maillage, getPosition: d => [d.lon, d.lat, 0],
+      id: `trains-icone-${piece.nom}`, data: p, mesh: piece.maillage, getPosition: d => [d.lon, d.lat, 0],
       getColor: d => disque ? couleurAlpha(d) : [...piece.couleur, Math.round((vitre ? 90 : 255) * d.alpha)],
       getOrientation: orientation, getScale: echelle, updateTriggers: { getScale: [ech.longueur, ech.largeur], getColor: [] }, sizeScale: 1,
       pickable: !vitre, material: matiere,
@@ -466,7 +554,7 @@ function creerDeck() {
       if (!object) return null;
       if (layer.id === "gares" || layer.id === "noms-gares") return object.nom + " : cliquer pour zoomer";
       if (object.membres) return object.n + " trains proches : cliquer pour la liste";
-      if (object.course) return `${object.etat}${object.perime ? " (périmé)" : ""} : ${object.gare || "?"}${object.gare_suivante ? " → " + object.gare_suivante : ""} (cliquer pour le suivre)`;
+      if (object.course) return `${object.etat}${suffixeEtiquettes(object)} : ${object.gare || "?"}${object.gare_suivante ? " → " + object.gare_suivante : ""} (cliquer pour le suivre)`;
       return null;
     },
     onViewStateChange: ({ viewState, interactionState }) => {
@@ -501,12 +589,12 @@ const esc = x => String(x == null ? "" : x).replace(/[&<>"']/g, c => ({ "&": "&a
 function minutes(s) { return s == null ? "inconnu" : (s >= 0 ? "+" : "−") + Math.round(Math.abs(s) / 60) + " min"; }
 
 function ligneGroupe(m) {   // un train d'un groupe de la bulle ; toute donnée PRIM passe par esc()
-  return '<div class="special"><b>' + esc(m.etat) + (m.perime ? " (périmé)" : "") + "</b> : " + esc(m.gare || "?")
+  return '<div class="special"><b>' + esc(m.etat) + esc(suffixeEtiquettes(m)) + "</b> : " + esc(m.gare || "?")
     + (m.gare_suivante ? " → " + esc(m.gare_suivante) : "") + "<br>Retard : " + minutes(m.retard_s) + "</div>";
 }
 
 function corpsTrain(t) {   // toute donnée PRIM passe par esc()
-  return `<b>${esc(t.etat)}${t.perime ? " (périmé)" : ""}</b>${t.perime ? '<br><span class="note">périmé : pas de nouvelle information de PRIM sur ce train depuis plus de 15 min ; sa position vient de l\'horaire seul.</span>' : ""}<br>Gare : ${esc(t.gare || "—")}${t.gare_suivante ? "<br>Prochaine gare : " + esc(t.gare_suivante) : ""}`
+  return `<b>${esc(t.etat)}${esc(suffixeEtiquettes(t))}</b>${etiquettes(t).map(e => `<br><span class="note"><b>${e.libelle}</b> : ${e.note}</span>`).join("")}<br>Gare : ${esc(t.gare || "—")}${t.gare_suivante ? "<br>Prochaine gare : " + esc(t.gare_suivante) : ""}`
     + `<br>Retard : ${minutes(t.retard_s)}<br>Mise à jour du train il y a ${t.age_s == null ? "?" : Math.round(t.age_s / 60)} min`
     + (t.horaires_incoherents ? `<br><b class="retard">⚠ ${esc(t.motif_vitesse)}</b>` : "")
     + (t.reconstruit ? "<br><i>heures reconstruites (gare retirée par PRIM)</i>" : "") + `<br><span class="note">${esc(t.course)}</span>`;
@@ -546,7 +634,7 @@ function panneau() {
   const n = e => trains.filter(t => t.etat === e).length;
   const p = placés();
   $("compteurs").innerHTML = `${trains.length} trains reçus : ${p.length} placés (${n("à quai")} à quai, ${n("en route")} en route, `
-    + `${p.filter(t => t.perime).length} périmés), ${n("non placé")} non placés, ${n("terminé")} terminés, ${n("position inconnue")} position inconnue.`;
+    + `${p.filter(t => t.donnees_anciennes).length} à données anciennes, ${p.filter(t => t.horaire_theorique).length} à l'horaire théorique), ${n("non placé")} non placés, ${n("terminé")} terminés, ${n("position inconnue")} position inconnue.`;
   const incoherents = trains.filter(t => t.horaires_incoherents).length;
   if (incoherents) $("compteurs").append(document.createElement("br"), `⚠ ${incoherents} train(s) aux horaires PRIM incohérents (vitesse limitée à 119 km/h).`);
   const speciaux = trains.filter(t => t.lat == null && t.etat !== "terminé");

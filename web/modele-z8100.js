@@ -1,4 +1,4 @@
-// Modèle 3D de la rame Z 8100 (MI79), PROPOSITION À VALIDER : rien de ce fichier n'est branché dans web/carte.js.
+// Modèle 3D de la rame Z 8100 (MI79), validé par Mathis le 17/11/2026 et utilisé par web/carte.js.
 //
 // Sources (fiche http://fbrisou.free.fr/RAIL21/FicheZ8100.pdf, page 4 et plans pages 4-9, + photo de Mathis, MI79 rénovée) :
 //   COTÉ sur la fiche : longueur de la rame 104,050 m ; motrice 26,025 m ; remorque 26,000 m ; largeur 2,798 m ; hauteur 4,170 m ;
@@ -416,9 +416,15 @@
       { motrice: false, L: COTES.longueurRemorque, debut: COTES.longueurMotrice + COTES.longueurRemorque, miroir: true },
       { motrice: true, L: COTES.longueurMotrice, debut: COTES.longueurMotrice + 2 * COTES.longueurRemorque, miroir: true },
     ];
-    for (const v of voitures) {
+    // options.voiture = 0 (motrice de tête) ou 1 (remorque) : UNE seule caisse, centrée sur elle-même (tête en +x), pour qu'elle suive les courbes sur sa propre position.
+    // La remorque 2 est la remorque 1 tournée de 180° autour de z, la motrice de queue est la motrice de tête tournée de 180° : la carte réutilise donc ces deux maillages.
+    const une = options && options.voiture != null ? options.voiture : null;
+    for (const [rang, v] of voitures.entries()) {
+      if (une != null && rang !== une) continue;
+      const decalage = une != null ? total / 2 - v.debut - v.L / 2 : 0;   // abscisse du centre de la caisse dans le repère de la rame
       // repère de la caisse (dessin, cabine à gauche) -> repère de la rame (tête en +x) : rotations de 180° autour de z, donc sans miroir
-      const pose = v.miroir ? ([x, y, z]) => [total / 2 - v.debut - (v.L - x), y, z] : ([x, y, z]) => [total / 2 - v.debut - x, -y, z];
+      const pose0 = v.miroir ? ([x, y, z]) => [total / 2 - v.debut - (v.L - x), y, z] : ([x, y, z]) => [total / 2 - v.debut - x, -y, z];
+      const pose = ([x, y, z]) => { const q = pose0([x, y, z]); return [q[0] - decalage, q[1], q[2]]; };
       // icône : la rame est élargie et rehaussée (y et z multipliés), la longueur reste vraie
       const poseFinale = icone ? (q) => { const [x, y, z] = pose(q); return [x, y * ECHELLE_ICONE, z * ECHELLE_ICONE]; } : pose;
       for (const nom of ORDRE) M[nom].pose = poseFinale;

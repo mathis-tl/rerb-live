@@ -24,6 +24,17 @@ SEUIL_PERIME = timedelta(minutes=15)
 # Décision du 13/11 : terminus sans départ -> départ = arrivée. Amendée le 17/11 (retour de Mathis : le train disparaissait à l'instant
 # d'arriver) : le départ est posé 60 s après l'arrivée. Valeur par défaut, à ajuster par Mathis.
 SEJOUR_TERMINUS = timedelta(seconds=60)
+# Décision du 18/11 (relevé de Mathis à Palaiseau : arrêt réel 17 à 32 s, PRIM annonce 63 à 77 s) : à une gare intermédiaire le départ est
+# recalculé = arrivée PRIM + séjour. L'arrivée PRIM reste la référence ; la vitesse de roulage s'ajuste d'elle-même (interpolation
+# départ -> arrivée suivante). Voir docs/recap-releve-palaiseau-18-11.md et docs/plan-sejour-quai.md.
+SEJOUR_QUAI = timedelta(seconds=25)
+SEJOUR_GARE_DENSE = timedelta(seconds=30)
+# Numéros de gare (StopArea) à fort trafic : Châtelet - Les Halles, Gare du Nord, Saint-Michel Notre-Dame, Luxembourg, Massy - Palaiseau,
+# Aéroport CDG 1, Aéroport Charles de Gaulle 2.
+GARES_DENSES = frozenset({"45102", "462394", "44877", "43833", "58774", "462398", "473364"})
+# Au-delà, PRIM annonce une vraie retenue (régulation, incident) : on ne raccourcit pas. 120 s décidé par Mathis le 18/11 : les arrêts annoncés
+# du relevé du matin (849 arrêts, toute la ligne) vont jusqu'à 97 s, aucun au-dessus de 180 s ; à revoir avec des données d'un jour perturbé.
+ARRET_ANNONCE_MAX = timedelta(seconds=120)
 
 
 class DistanceInconnue(ValueError):
@@ -67,6 +78,20 @@ class Estimation:
     perime: bool = False
     reconstruit: bool = False          # une des gares utilisées vient de la mémoire
     repare: bool = False               # une des gares utilisées a une heure réparée
+
+
+def sejour_gare(gare):
+    """Séjour à quai retenu pour une gare : 30 s si elle est dans GARES_DENSES, sinon 25 s (identifiant illisible compris)."""
+    try:
+        return SEJOUR_GARE_DENSE if stop_area_number(gare) in GARES_DENSES else SEJOUR_QUAI
+    except StopNotFound:
+        return SEJOUR_QUAI
+
+
+def depart_effectif(gare, arrivee, depart):
+    """Départ retenu à une gare intermédiaire : arrivée + séjour si PRIM annonce un arrêt plus long (jusqu'à ARRET_ANNONCE_MAX), sinon inchangé."""
+    sejour = sejour_gare(gare)
+    return arrivee + sejour if sejour < depart - arrivee <= ARRET_ANNONCE_MAX else depart
 
 
 def _heure(texte):
@@ -120,6 +145,8 @@ def estimer(train, t, distance, seuil_perime=SEUIL_PERIME):
             arrivee = depart
         if depart is None and i == dernier:
             depart = arrivee + SEJOUR_TERMINUS   # PRIM ne donne pas de départ au terminus : le train reste à quai un moment avant de disparaître
+        elif arrivee is not None and depart is not None and i < dernier:
+            depart = depart_effectif(p.gare, arrivee, depart)   # arrêt annoncé trop long : ramené au séjour mesuré, jamais d'allongement
         if arrivee is None or depart is None:
             return _non_place("heures manquantes", perime)
         horaires.append((p.gare, arrivee, depart, p.reconstruit, p.repare))

@@ -1,6 +1,6 @@
 """Modèle 3D de la rame Z 8100 (web/modele-z8100.js) : cotes de la fiche respectées, format de maillage attendu par deck.gl.
 
-Le modèle est une PROPOSITION à valider (non branchée dans web/carte.js). Ces tests tournent avec `node`, comme ceux de test_web.py.
+Le modèle (validé le 17/11) est utilisé par web/carte.js. Ces tests tournent avec `node`, comme ceux de test_web.py.
 """
 import json
 import shutil
@@ -92,6 +92,35 @@ class TestModeleIcone(unittest.TestCase):
         self.assertAlmostEqual(r["l"], 104.050, places=3)   # la longueur reste vraie (position sur la voie juste)
         self.assertIn("disque", r["pieces"])
         self.assertLess(r["n"], 15000)
+
+
+class TestModeleParCaisse(unittest.TestCase):
+    """Une caisse seule, centrée sur elle-même : la carte pose chaque caisse sur la voie pour que la rame se plie dans les courbes."""
+
+    CODE = """
+    const M = require('./web/modele-z8100.js');
+    const sommets = o => { const out = []; let n = 0, mn = 1e9, mx = -1e9;
+      for (const p of M.construire(o).pieces) { const v = p.maillage.positions.value; n += v.length / 9;
+        for (let i = 0; i < v.length; i += 3) { mn = Math.min(mn, v[i]); mx = Math.max(mx, v[i]); out.push(p.nom + [v[i], v[i+1], v[i+2]].map(a => a.toFixed(3)).join(',')); } }
+      return { out, n, mn, mx }; };
+    const tourne = s => s.out.map(l => { const nom = l.replace(/[-0-9.,]+$/, ''); const [x, y, z] = l.slice(nom.length).split(',').map(Number); return nom + [-x, -y, z].map(a => a.toFixed(3)).join(','); }).sort();
+    const entier = sommets({}), c = [0, 1, 2, 3].map(k => sommets({ voiture: k }));
+    console.log(JSON.stringify({
+      n: [entier.n, c.map(s => s.n)], x: c.map(s => [s.mn, s.mx]),
+      queue: JSON.stringify(c[3].out.slice().sort()) === JSON.stringify(tourne(c[0])), remorque: JSON.stringify(c[2].out.slice().sort()) === JSON.stringify(tourne(c[1])),
+    }));
+    """
+
+    def test_caisses_centrees_et_identiques_a_la_rame(self):
+        r = json.loads(subprocess.run(["node", "-e", self.CODE], capture_output=True, text=True, timeout=120, check=True,
+                                      cwd=str(Path(__file__).resolve().parent.parent)).stdout)
+        entier, par_caisse = r["n"]
+        self.assertEqual(sum(par_caisse), entier, "les quatre caisses reconstituent exactement la rame")
+        for (mn, mx), longueur in zip(r["x"], (26.025, 26.0, 26.0, 26.025)):
+            self.assertAlmostEqual(mx - mn, longueur, delta=0.02)
+            self.assertAlmostEqual((mx + mn) / 2, 0, delta=0.02, msg="caisse centrée sur elle-même")
+        self.assertTrue(r["queue"], "la motrice de queue est la motrice de tête tournée de 180°")
+        self.assertTrue(r["remorque"], "la 2e remorque est la 1re tournée de 180°")
 
 
 if __name__ == "__main__":

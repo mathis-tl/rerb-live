@@ -15,6 +15,7 @@ import argparse
 import functools
 import http.client
 import json
+import math
 import os
 import sys
 import threading
@@ -29,6 +30,7 @@ from pathlib import Path
 from duree_troncon import fournisseur_duree_min
 from gare import ReleveurGares
 from geometry import Geometry, NoValidDistance, _dist, load_morceaux, point_a_distance
+from lissage import Lisseur
 from memoire import Memoire
 from position import DistanceInconnue, Etat, Reseau, distance_depuis_reseau, estimer, lire_train
 from stops import load_stops, stop_area_number
@@ -113,6 +115,8 @@ def _gare_suivante(train, gare):
     return ordre[i + 1] if i + 1 < len(ordre) else None
 
 
+DEMI_VOIE_M = 170.0   # demi-longueur du tracé de voie envoyé avec chaque train : demi-rame (52 m) + déplacement entre deux relevés (≤ 100 m) + marge
+PAS_VOIE_M = 8.0      # un point tous les 8 m : assez fin pour les courbes (rayon ≥ 100 m), corde d'un bogie de 18,5 m
 VITESSE_MAX_MS = 33.0   # 119 km/h : vitesse maximale du RER B (120 km/h) ; plancher de durée (distance / 33) et repli si tronçon inconnu
 TABLE_DUREES = RACINE / "rerb" / "donnees" / "duree_min_troncon.json"   # T1 : durée minimale plausible par tronçon (correction estimée)
 
@@ -126,6 +130,8 @@ def _nom_sur(nom_gare, ref):
     except (KeyError, ValueError):
         return ref
 
+
+OBSERVATION_MIN_S = 600.0   # « Horaire théorique » seulement après 10 min de suivi en relevés PRIM distincts (au moins 5 à 120 s) : un train vu une fois, ou un relevé figé, ne prouve rien
 
 INCERTITUDE_MEDIANE_S = 44.0   # J2 bis (16/11/2026) : médiane de |départ réel - départ estimé|, mesurée à quai (docs/recap-j2bis-verite-gares.md)
 INCERTITUDE_P90_S = 117.0      # J2 bis : 90e centile. Ordres de grandeur d'un seul jour, pas une erreur mesurée en pleine voie ; biais +53 s non appliqué
@@ -174,14 +180,20 @@ def _incertitude(train, maintenant, distance, localiser, duree_min):
             "p90": [pt for _d, pt in points]}
 
 
-def calculer_trains(releve, maintenant, distance, localiser, nom_gare, duree_min=None):
+def calculer_trains(releve, maintenant, distance, localiser, nom_gare, duree_min=None, lisseur=None):
     """Un dict par train du relevé, à l'instant `maintenant`. `localiser(gare, gare_suivante, distance_m)` ->
     (lat, lon, cap en degrés ou None) ; il peut lever une erreur de géométrie : le train reste dans la liste,
     sans position, avec son motif. À quai, `gare_suivante` donne l'orientation de la rame (None au terminus).
     `duree_min(ref_gare, ref_gare_suivante)` -> (secondes, source) ou None (tronçon inconnu) : durée minimale plausible du
-    tronçon (T1, correction estimée). Jamais sous le plancher distance / VITESSE_MAX_MS, qui sert aussi de repli."""
+    tronçon (T1, correction estimée). Jamais sous le plancher distance / VITESSE_MAX_MS, qui sert aussi de repli.
+    `lisseur` (rerb/lissage.py, facultatif) : mémoire des arrivées adoptées ; les heures PRIM sont lissées avant l'estimation de position
+    (une révision de PRIM ne fait pas sauter le train) et les courses absentes du relevé sont oubliées."""
+    if lisseur is not None:
+        lisseur.purger(releve.trains.keys())
     sortie = []
     for ref, (train, retards) in releve.trains.items():
+        if lisseur is not None:
+            train = lisseur.appliquer(ref, train, maintenant, recu=releve.recu)
         e = estimer(train, maintenant, distance)
         lat = lon = cap = None
         motif = e.motif
@@ -202,16 +214,31 @@ def calculer_trains(releve, maintenant, distance, localiser, nom_gare, duree_min
                 lat, lon, cap = localiser(e.gare, suivante, distance_m)
             except (KeyError, ValueError, DistanceInconnue) as erreur:
                 motif = f"position impossible ({erreur})"
+        trace_voie = None
+        fonction_voie = getattr(localiser, "voie", None)
+        if lat is not None and fonction_voie is not None:
+            try:
+                trace_voie = fonction_voie(e.gare, suivante, distance_m)
+            except (KeyError, ValueError, DistanceInconnue):
+                trace_voie = None   # la carte posera la rame en ligne droite
         gare_pertinente = e.gare_suivante or e.gare
+        retard = retards.get(gare_pertinente) if gare_pertinente else None
+        # « Horaire théorique » (indicatif) : l'heure estimée égale l'horaire ET PRIM ne l'a jamais modifiée depuis plus de 10 min de suivi. Un train
+        # à l'heure donne aussi des heures égales : on ne parle donc jamais de « sans temps réel », seulement d'un horaire sans écart annoncé.
+        horaire_theorique = (lisseur is not None and retard == 0 and not lisseur.modifie(ref)
+                             and lisseur.suivi_s(ref) >= OBSERVATION_MIN_S)
         sortie.append({
             "course": ref, "etat": e.etat.value, "motif": motif,
             "horaires_incoherents": incoherent, "vitesse_implicite_ms": vitesse, "motif_vitesse": motif_vitesse,
             "correction_estimee": corrige, "duree_min_s": minimum_s, "source_duree_min": source_min,
             "gare": _nom_sur(nom_gare, e.gare),
             "gare_suivante": _nom_sur(nom_gare, e.gare_suivante),
-            "lat": lat, "lon": lon, "cap": cap, "terminus": terminus,
-            "retard_s": retards.get(gare_pertinente) if gare_pertinente else None,
-            "perime": e.perime, "reconstruit": e.reconstruit, "repare": e.repare,
+            "lat": lat, "lon": lon, "cap": cap, "voie": trace_voie, "terminus": terminus,
+            "retard_s": retard,
+            "donnees_anciennes": e.perime,   # relevé de la course vieux de plus de 15 min (SEUIL_PERIME) ; remplace « périmé », mot trompeur
+            "perime": e.perime,              # ancien nom, conservé un temps pour la compatibilité (la page ne le lit plus)
+            "horaire_theorique": horaire_theorique,
+            "reconstruit": e.reconstruit, "repare": e.repare,
             "incertitude": _incertitude(train, maintenant, distance, localiser, duree_min) if lat is not None else None,
             "age_s": None if train.recorded_at is None else int((maintenant - train.recorded_at).total_seconds()),
         })
@@ -357,13 +384,14 @@ def fichier_statique(racine, chemin_url):
 
 
 def creer_serveur(releveur, distance, localiser, nom_gare, port=8765, horloge=None, racine_web=None, geo=None,
-                  demo=False, releveur_gares=None, gares=None, duree_min=None):
+                  demo=False, releveur_gares=None, gares=None, duree_min=None, lisseur=None):
     """Serveur HTTP sur 127.0.0.1 seulement. `horloge()` -> instant UTC (remplaçable en test).
     Routes : /trains, /statut, /geo (tracé et gares), fichiers de `racine_web` (défaut : web/). Le reste : 404.
     /gare?ref=<numéro> : prochains trains d'une gare (stop-monitoring), seulement si `releveur_gares` et `gares`
     ({numéro: nom}, la liste blanche des gares autorisées) sont fournis ; toute autre valeur : 404, aucun appel PRIM.
     demo=True : les trains sont INVENTÉS ; la réponse porte `"demo": true` pour que la page l'annonce."""
     horloge = horloge or (lambda: datetime.now(timezone.utc))
+    lisseur = lisseur if lisseur is not None else Lisseur()   # un lisseur par serveur : la seule mémoire des relevés passés
     racine_web = Path(racine_web) if racine_web is not None else WEB
 
     def charge_utile():
@@ -376,7 +404,7 @@ def creer_serveur(releveur, distance, localiser, nom_gare, port=8765, horloge=No
             "releve_age_s": int((maintenant - r.recu).total_seconds()) if r else None,
             "erreur": releveur.derniere_erreur, "bloque": releveur.bloque,
             "plafond": {"utilises": releveur.plafond.utilises, "maximum": releveur.plafond.maximum},
-            "trains": calculer_trains(r, maintenant, distance, localiser, nom_gare, duree_min) if r else [],
+            "trains": calculer_trains(r, maintenant, distance, localiser, nom_gare, duree_min, lisseur) if r else [],
         }
 
     class Gestionnaire(BaseHTTPRequestHandler):
@@ -457,6 +485,19 @@ def construire_contexte(csv_gares=CSV_GARES, trace=TRACE):
         except (KeyError, NoValidDistance):
             return (gares[a].lat, gares[a].lon)
 
+    def _trajet(a, suivante):
+        """(longueur, point_a(x)) du tronçon a -> suivante : point (lat, lon) à x mètres du début, recalé sur le quai de chaque gare."""
+        b = stop_area_number(suivante)
+        chemin = troncon(a, b)
+        longueur = sum(_dist(p, q) for p, q in zip(chemin, chemin[1:]))
+        (dlat_a, dlon_a), (dlat_b, dlon_b) = ((q[0] - c[0], q[1] - c[1]) for q, c in ((quai(a), chemin[0]), (quai(b), chemin[-1])))
+
+        def avec_decalage(x):
+            point = point_a_distance(chemin, x)
+            g = x / longueur if longueur > 0 else 0.0
+            return (point[0] + dlat_a * (1 - g) + dlat_b * g, point[1] + dlon_a * (1 - g) + dlon_b * g)
+        return longueur, avec_decalage
+
     def localiser(gare, suivante, distance_m):
         """Position sur le tronçon, recalée sur le quai commun de chaque gare : le chemin (choisi par paire de gares) peut finir
         à 100 m du quai où le train repart ; on le décale donc de façon progressive (début -> quai de A, fin -> quai de B) au lieu
@@ -464,20 +505,24 @@ def construire_contexte(csv_gares=CSV_GARES, trace=TRACE):
         a = stop_area_number(gare)
         if suivante is None:
             return (*quai(a), None)
-        b = stop_area_number(suivante)
-        chemin = troncon(a, b)
-        longueur = sum(_dist(p, q) for p, q in zip(chemin, chemin[1:]))
+        longueur, avec_decalage = _trajet(a, suivante)
         d = min(max(distance_m or 0.0, 0.0), longueur)
-        (dlat_a, dlon_a), (dlat_b, dlon_b) = ((q[0] - c[0], q[1] - c[1]) for q, c in ((quai(a), chemin[0]), (quai(b), chemin[-1])))
-
-        def avec_decalage(x):
-            point = point_a_distance(chemin, x)
-            g = x / longueur if longueur > 0 else 0.0
-            return (point[0] + dlat_a * (1 - g) + dlat_b * g, point[1] + dlon_a * (1 - g) + dlon_b * g)
-
         lat, lon = avec_decalage(d)   # à quai (d = 0) : quai de la gare, SUR la voie, sans saut au démarrage
         cap = cap_degres(avec_decalage(max(d - 4.0, 0.0)), avec_decalage(min(d + 4.0, longueur)))
         return (lat, lon, cap)
+
+    def voie(gare, suivante, distance_m):
+        """Tracé de la voie autour du train, dans le sens de la marche : [[lon, lat], ...] de d - DEMI_VOIE_M à d + DEMI_VOIE_M (borné au tronçon),
+        un point tous les PAS_VOIE_M. La carte y pose chaque caisse pour que la rame suive les courbes. None au terminus (pas de tronçon)."""
+        if suivante is None:
+            return None
+        longueur, avec_decalage = _trajet(stop_area_number(gare), suivante)
+        d = min(max(distance_m or 0.0, 0.0), longueur)
+        debut, fin = max(0.0, d - DEMI_VOIE_M), min(longueur, d + DEMI_VOIE_M)
+        n = max(1, math.ceil((fin - debut) / PAS_VOIE_M))
+        points = [avec_decalage(debut + (fin - debut) * k / n) for k in range(n + 1)]
+        return [[round(lon, 6), round(lat, 6)] for lat, lon in points]
+    localiser.voie = voie
 
     def nom_gare(ref):
         return gares[stop_area_number(ref)].name
@@ -524,18 +569,23 @@ def main(argv=None):
     ap.add_argument("--plafond-gares", type=int, default=PLAFOND_GARES_JOUR, help="appels stop-monitoring maximum par jour")
     ap.add_argument("--fichier-plafond-gares", default=str(Path.home() / ".rerb-prim-serveur-gares-plafond.json"))
     ap.add_argument("--demo", action="store_true", help="trains INVENTÉS, aucun appel PRIM, aucune clé lue")
+    ap.add_argument("--revisions", action="store_true", help="avec --demo : PRIM « révise » les heures d'arrivée toutes les 30 s (±45 s, parfois +150 s), pour juger le lissage")
+    ap.add_argument("--rampe", type=float, default=None, help="lissage : secondes d'arrivée rattrapées par seconde (défaut 0,2 ; 1,0 = suit PRIM sans lissage de vitesse)")
     a = ap.parse_args(argv)
+    if a.revisions and not a.demo:
+        ap.error("--revisions n'a de sens qu'avec --demo (les trains sont inventés)")
+    lisseur = Lisseur(rampe=a.rampe) if a.rampe is not None else None
     distance, localiser, nom_gare = construire_contexte()
     if a.demo:
         from demo import livraison_demo, stop_monitoring_demo
         chaine = chaine_demo()
-        source = lambda: livraison_demo(datetime.now(timezone.utc), chaine, distance)  # noqa: E731
+        source = lambda: livraison_demo(datetime.now(timezone.utc), chaine, distance, revisions=a.revisions)  # noqa: E731
         releveur = Releveur(source, Plafond(os.devnull, 10 ** 9), intervalle_s=5)
         nom_ = nom_gare
         releveur_gares = ReleveurGares(
-            lambda ref: stop_monitoring_demo(datetime.now(timezone.utc), ref, chaine, distance, nom_),
+            lambda ref: stop_monitoring_demo(datetime.now(timezone.utc), ref, chaine, distance, nom_, revisions=a.revisions),
             Plafond(os.devnull, 10 ** 9), intervalle_s=5)
-        message = "MODE DÉMONSTRATION : trains inventés, aucun appel PRIM, aucune clé lue"
+        message = "MODE DÉMONSTRATION : trains inventés, aucun appel PRIM, aucune clé lue" + (" ; heures PRIM révisées toutes les 30 s" if a.revisions else "")
     else:
         if a.intervalle < 60 or a.plafond > 1400:
             ap.error("intervalle >= 60 s et plafond <= 1 400 par jour (quota PRIM : 1 500)")
@@ -547,7 +597,7 @@ def main(argv=None):
                    f"prochains trains : 1 appel par gare au plus toutes les 60 s (plafond {a.plafond_gares} par jour)")
     noms = {n: g.name for n, g in _charger(CSV_GARES, TRACE)[0].items()}
     serveur = creer_serveur(releveur, distance, localiser, nom_gare, a.port, geo=charger_geo(), demo=a.demo,
-                            releveur_gares=releveur_gares, gares=noms, duree_min=fournisseur_duree_min(TABLE_DUREES))
+                            releveur_gares=releveur_gares, gares=noms, duree_min=fournisseur_duree_min(TABLE_DUREES), lisseur=lisseur)
     print(f"carte sur http://127.0.0.1:{serveur.server_address[1]}/  ({message})", flush=True)
     try:
         serveur.serve_forever()
