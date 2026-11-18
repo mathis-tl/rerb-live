@@ -487,3 +487,89 @@ class TestCodeCarte(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTableauRendu(unittest.TestCase):
+    """Maquette `web/tableau-rendu.html` : un train par état, de près et de loin, en thème clair et sombre (données inventées, aucun serveur PRIM)."""
+    ETATS = ("En route", "À quai", "Terminus", "Données anciennes", "Horaire théorique", "Train sélectionné", "Retenu")
+    SANS_POSITION = ("Non placé", "Position inconnue", "Terminé")
+
+    def setUp(self):
+        self.html = (WEB / "tableau-rendu.html").read_text(encoding="utf-8")
+        self.js = (WEB / "tableau-rendu.js").read_text(encoding="utf-8")
+
+    def test_aucune_adresse_externe_ni_script_en_ligne(self):
+        for nom, texte in (("html", self.html), ("js", self.js)):
+            texte = re.sub(r"/\*.*?\*/", "", texte, flags=re.S)
+            texte = "\n".join(l for l in texte.splitlines() if not l.lstrip().startswith("//"))
+            self.assertIsNone(URL_EXTERNE.search(texte), nom)
+        # la politique CSP du serveur n'autorise que script-src 'self' : aucun script écrit dans la page
+        for balise in re.findall(r"<script\b[^>]*>", self.html):
+            self.assertIn("src=", balise)
+        self.assertIn("vendor/deck.gl-9.4.1.min.js", self.html)
+        self.assertIn("modele-z8100.js", self.html)
+        self.assertIn("tableau-rendu.js", self.html)
+
+    def test_tous_les_etats_sont_montres(self):
+        for e in self.ETATS:
+            self.assertIn(e, self.js, e)
+        for e in self.SANS_POSITION:
+            self.assertIn(e, self.html + self.js, e)
+
+    def test_les_deux_propositions_de_retenu_et_les_quatre_vues(self):
+        self.assertIn("proposition A", self.js)
+        self.assertIn("proposition B", self.js)
+        for vue in ("clair-pres", "clair-loin", "sombre-pres", "sombre-loin"):
+            self.assertIn(vue, self.html + self.js, vue)
+
+    def test_distingue_l_existant_du_propose(self):
+        self.assertIn("existe déjà", self.js)
+        self.assertIn("proposé", self.js)
+
+    def test_les_couleurs_d_etat_sont_celles_de_la_carte(self):
+        carte = (WEB / "carte.js").read_text(encoding="utf-8")
+        for nom in ("COULEURS", "GRIS", "ROUGE_TERMINUS"):
+            valeur = re.search(rf"const {nom} = (\{{[^}}]*\}}|\[[^\]]*\]);", carte).group(1)
+            self.assertIn(valeur, self.js, nom)
+
+    def test_contour_autour_de_la_rame_option_du_tableau(self):
+        # proposé le 18/11 : contour en gélule posé au sol autour de la rame (un tracé par état, épaisseur en pixels), au lieu d'un cercle dessous
+        self.assertIn('id="contour"', self.html)
+        self.assertIn("Contour en gélule", self.html)
+        self.assertIn("PathLayer", self.js)
+        self.assertIn('widthUnits: "pixels"', self.js)
+        self.assertNotIn("cullMode", self.js)   # la coque 3D retournée est abandonnée
+
+    def test_camera_pilotable_dans_le_tableau(self):
+        # 18/11 : Mathis veut tourner autour des rames pour juger le contour en 3D
+        self.assertIn("controller: true", self.js)
+        self.assertIn("dragRotate: true", self.js)
+        self.assertIn("maxPitch: 85", self.js)
+        for bouton in ("vue-reinit", "vue-dessus", "vue-cote", "vue-bout", "vue-tourner", "sync"):
+            self.assertIn(f'id="{bouton}"', self.html)
+
+    def test_detaille_des_le_zoom_15_et_icone_en_dessous(self):
+        # 18/11 : seuil à 15 décidé par Mathis (12 essayé : détaillé agrandi moins lisible que l'icône) ; l'icône (palette alignée) ne sert qu'en dessous
+        self.assertRegex(self.js, r"const ZOOM_DETAIL = 15,")
+        self.assertIn("ZOOM_PLEIN = 16", self.js)
+        self.assertIn("PALETTE_ALIGNEE", self.js)
+        self.assertIn('id="palette"', self.html)
+        for vue in ("clair-moyen", "sombre-moyen"):
+            self.assertIn(vue, self.html + self.js, vue)
+
+    def test_page_de_comparaison_avant_apres_par_niveau_de_zoom(self):
+        html = (WEB / "comparaison-zoom.html").read_text(encoding="utf-8")
+        js = (WEB / "comparaison-zoom.js").read_text(encoding="utf-8")
+        for balise in re.findall(r"<script\b[^>]*>", html):
+            self.assertIn("src=", balise)   # CSP du serveur : aucun script en ligne
+        for nom, texte in (("html", html), ("js", js)):
+            texte = "\n".join(l for l in texte.splitlines() if not l.lstrip().startswith("//"))
+            self.assertIsNone(URL_EXTERNE.search(texte), nom)
+        self.assertIn("tableau-rendu.js", html)
+        self.assertIn("ZOOMS = [10, 11, 12, 13, 14, 15, 16, 17]", js)   # un niveau de zoom de plus = échelle x2
+        self.assertIn("AVANT", html + js)
+        self.assertIn("APRÈS", html + js)
+
+    def test_cumuls_d_etats_montres(self):
+        self.assertIn("Terminus + sélectionné", self.js)
+        self.assertIn("Retenu B + données anciennes", self.js)
