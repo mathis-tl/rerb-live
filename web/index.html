@@ -76,11 +76,13 @@
 </main>
 <div id="legende"><b>Position estimée, pas GPS</b>
   <span id="source-decor" class="note" hidden></span>
-  <span class="note">de loin : icône du train agrandie (pas à l'échelle) ; de près : modèle détaillé de la Z 8100 ; bulle « n » = n trains proches, cliquer pour la liste</span>
+  <span class="note">de loin (zoom < 15) : icône du train agrandie (pas à l'échelle) ; de près : modèle détaillé de la Z 8100 ; bulle « n » = n trains proches, cliquer pour la liste</span>
   <span class="pastille" style="background:#2f855a"></span>à quai
   <span class="pastille" style="background:#2b6cb0"></span>en route
-  <span class="pastille" style="background:#e22230"></span>au terminus (60 s avant de disparaître)
-  <span class="pastille" style="background:#a0a7ad"></span>données anciennes (pas de nouvelle information de PRIM depuis 15 min ; position extrapolée de la dernière estimation)
+  <span class="note">contour autour de la rame (plusieurs états : contours emboîtés) :</span>
+  <span class="pastille contour" style="border-color:#ff3c4b"></span>au terminus (60 s avant de disparaître ; le trait pulse)
+  <span class="pastille contour" style="border-color:#a855f7"></span>train sélectionné
+  <span class="pastille contour" style="border-color:#a0a7ad"></span>données anciennes (pas de nouvelle information de PRIM depuis 15 min ; position extrapolée de la dernière estimation)
   <span class="note">« horaire théorique » : l'heure affichée est celle de l'horaire, PRIM n'annonce aucun écart : soit le train est à l'heure, soit PRIM ne suit pas ce train en temps réel (indicatif, sans couleur)</span>
   <span class="pastille zone"></span>trait = erreur supposée le long de la voie
   <span id="legende-hauteurs" class="note"><span class="pastille carre bat-mesure"></span>hauteur connue (OSM ou IGN BD TOPO : hauteur, ou étages × 3 m)

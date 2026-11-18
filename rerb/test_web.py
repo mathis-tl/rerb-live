@@ -108,9 +108,21 @@ class TestCodeCarte(unittest.TestCase):
         self.assertLessEqual(e["longueur"], 60)
         self.assertLessEqual(e["largeur"], 120)
 
-    def test_bascule_icone_detail_au_zoom_16(self):
-        self.assertTrue(self._echelle(16)["detail"])
-        self.assertFalse(self._echelle(15.9)["detail"])
+    def test_bascule_icone_detail_au_zoom_15(self):
+        # seuil décidé le 18/11 (12 essayé : détaillé agrandi moins lisible que l'icône aux zooms 12 à 14)
+        self.assertTrue(self._echelle(15)["detail"])
+        self.assertFalse(self._echelle(14.9)["detail"])
+
+    def test_detaille_elargi_en_continu_entre_les_zooms_16_et_15(self):
+        largeurs = [self._echelle(z)["largeur"] for z in (16, 15.75, 15.5, 15.25, 15)]
+        self.assertEqual(largeurs[0], 1)
+        self.assertEqual(largeurs, sorted(largeurs))
+        self.assertGreater(largeurs[-1], 4, "à 15, la caisse (2,8 m) mesure ~10 px de large")
+        for z in (15.75, 15.5, 15):
+            self.assertEqual(self._echelle(z)["longueur"], 1, "la longueur reste vraie : la rame fait déjà plus de 40 px")
+        # pas de saut à la bascule : la largeur apparente de l'icône juste dessous est du même ordre
+        icone = self._echelle(14.99)
+        self.assertLess(abs(icone["largeur"] * 4.2 - largeurs[-1] * 2.798) / (icone["largeur"] * 4.2), 0.05)
 
     def test_echelle_croissante_en_dezoomant(self):
         valeurs = [self._echelle(z)["longueur"] for z in (15, 13, 11, 9.6, 8)]
@@ -296,10 +308,75 @@ class TestCodeCarte(unittest.TestCase):
         self.assertNotIn('value="tout"', html)
         self.assertIn("Trains affichés : ", self.js)
 
-    def test_train_au_terminus_rouge_avec_halo(self):
+    def test_train_au_terminus_rouge_avec_contour_qui_pulse(self):
         self.assertIn("t.terminus ? ROUGE_TERMINUS", self.js)
-        self.assertIn('id: "terminus-halo"', self.js)
-        self.assertIn("trains.some(t => t.terminus)", self.js, "le halo pulse : l'animation continue tant qu'un train est au terminus")
+        self.assertNotIn('id: "terminus-halo"', self.js, "le halo circulaire est remplacé par le contour en gélule")
+        self.assertIn("trains.some(t => t.terminus)", self.js, "le contour pulse : l'animation continue tant qu'un train est au terminus")
+
+    # --- contour en gélule autour de la rame (maquette validée le 18/11)
+
+    def _contour(self, expression):
+        import re, shutil, subprocess
+        if not shutil.which("node"):
+            self.skipTest("node absent")
+        bloc = lambda a, b: self.js.split(a)[1].split(b)[0]
+        constantes = " ".join(re.search(rf"const {n} = \[[^\]]*\];", self.js).group(0) for n in ("GRIS", "COULEUR_SELECTION"))
+        code = (constantes + bloc("// --- échelle du train", "// --- fin échelle du train") + bloc("// --- voitures", "// --- fin voitures")
+                + bloc("// --- contour", "// --- fin contour") + f"; console.log(JSON.stringify({expression}))")
+        return json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, timeout=30, check=True).stdout)
+
+    def test_etats_qui_dessinent_un_contour_et_leur_ordre(self):
+        c = lambda t, sel: [x["couleur"] for x in self._contour(f"contoursDeTrain({json.dumps(t)}, {json.dumps(sel)})")]
+        self.assertEqual(c({}, False), [], "en route, à quai, horaire théorique : pas de contour")
+        self.assertEqual(c({"horaire_theorique": True}, False), [])
+        self.assertEqual(c({"terminus": True}, False), [[255, 60, 75]])
+        self.assertEqual(c({"donnees_anciennes": True}, False), [[160, 167, 173]])
+        self.assertEqual(c({}, True), [[168, 85, 247]], "la sélection est violette (ni ambre ni jaune)")
+        # cumul : le plus important au plus près de la rame
+        self.assertEqual(c({"terminus": True, "donnees_anciennes": True}, True), [[255, 60, 75], [168, 85, 247], [160, 167, 173]])
+        self.assertTrue(self._contour('contoursDeTrain({terminus: true}, false)[0].pulse'))
+        self.assertFalse(self._contour('contoursDeTrain({}, true)[0].pulse'))
+
+    def test_gelule_a_distance_constante_de_l_axe(self):
+        # axe en arc de 150 m de rayon : chaque point du contour est à r de l'axe (côtés parallèles, bouts arrondis)
+        R, r = 150.0, 2.5
+        axe = [[R * (1 - math.cos(a)), R * math.sin(a)] for a in [math.radians(k * 40 / 12) for k in range(13)]]
+        pts = self._contour(f"gelule({json.dumps(axe)}, {r})")
+        self.assertEqual(pts[0], pts[-1], "contour fermé")
+        def dist_axe(p):
+            d = 1e9
+            for a, b in zip(axe, axe[1:]):
+                ex, ey, L2 = b[0] - a[0], b[1] - a[1], (b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2
+                t = max(0, min(1, ((p[0] - a[0]) * ex + (p[1] - a[1]) * ey) / L2))
+                d = min(d, math.hypot(p[0] - a[0] - t * ex, p[1] - a[1] - t * ey))
+            return d
+        for p in pts:
+            self.assertAlmostEqual(dist_axe(p), r, delta=0.08)
+        # bouts arrondis : le contour dépasse l'axe de r à chaque bout, dans l'axe
+        self.assertGreater(max(math.hypot(p[0] - axe[0][0], p[1] - axe[0][1]) for p in pts), r - 0.01)
+
+    def test_axe_de_la_rame_suit_la_voie_en_courbe(self):
+        R, ky, kx = 150.0, 110540.0, 111320 * math.cos(math.radians(48.8))
+        arc = [[2 + R * (1 - math.cos(a)) / kx, 48.8 + R * math.sin(a) / ky] for a in [math.radians(k * 90 / 60) for k in range(61)]]
+        milieu = arc[30]
+        axe = self._contour(f"axeSurVoie({json.dumps(arc)}, {milieu[0]}, {milieu[1]}, 50.6)")
+        self.assertGreaterEqual(len(axe), 13, "assez de points pour suivre la courbe")
+        centre = [(2 + R / kx - milieu[0]) * kx, (48.8 - milieu[1]) * ky]   # centre du cercle, en mètres autour du centre de la rame
+        for x, y in axe:
+            self.assertAlmostEqual(math.hypot(x - centre[0], y - centre[1]), R, delta=0.2)
+        self.assertAlmostEqual(math.hypot(axe[-1][0] - axe[0][0], axe[-1][1] - axe[0][1]), 2 * R * math.sin(101.2 / (2 * R)), delta=0.3)
+        self.assertIsNone(self._contour("axeSurVoie([], 2, 48.8, 50)"))
+
+    def test_carte_dessine_socle_et_contours_et_plus_les_anciens_cercles(self):
+        for couche in ('id: "rames-socle"', 'id: "rames-contour"'):
+            self.assertIn(couche, self.js)
+        self.assertNotIn("[245, 158, 11]", self.js, "l'ambre de l'ancien anneau de sélection est retiré")
+        self.assertIn("COULEUR_SELECTION = [168, 85, 247]", self.js)
+        self.assertIn("PathLayer", self.js)
+
+    def test_palette_de_l_icone_alignee_sur_le_detaille(self):
+        self.assertIn("PALETTE_ICONE = { bleu: [105, 128, 176], noir: [52, 56, 62] }", self.js)
+        self.assertIn("PALETTE_ICONE[piece.nom] || piece.couleur", self.js)
 
     # --- rame articulée : chaque caisse sur la voie
 

@@ -14,6 +14,7 @@ const INTERVALLE_MS = 3000;            // le serveur n'appelle PRIM qu'au plus t
 const COULEURS = { "à quai": [47, 133, 90], "en route": [43, 108, 176] };
 const ROUGE_TERMINUS = [226, 34, 48];   // train arrivé au terminus (séjour de 60 s avant de disparaître)
 const GRIS = [160, 167, 173];
+const COULEUR_SELECTION = [168, 85, 247];   // contour du train sélectionné (violet : l'ambre de l'ancien anneau se confondait avec le jaune prévu pour « retenu »)
 const MASSY = { longitude: 2.2588, latitude: 48.7255 };
 
 let geo = null, trains = [], statut = null, mode = "mixte", zoom = 9, pasZoom = 90, filtreDirection = "nord", groupeOuvert = null, groupes = new Map(), selection = null, gareChoisie = "58774", dernierePrevision = null;
@@ -23,16 +24,23 @@ let geo = null, trains = [], statut = null, mode = "mixte", zoom = 9, pasZoom = 
 const MODELES = { motrice: ModeleZ8100.construire({ voiture: 0 }), remorque: ModeleZ8100.construire({ voiture: 1 }), icone: ModeleZ8100.construire({ icone: true }) };
 
 // --- échelle du train
-// De près (zoom >= ZOOM_DETAIL) : modèle détaillé à la taille réelle. De loin : modèle icône (rame élargie et rehaussée une fois pour toutes),
-// agrandi en plus selon le zoom pour rester visible : ~40 px de long et ~10 px de large (rame 25 fois plus longue que large : un
-// agrandissement uniforme resterait un fil). Mètres par pixel de deck.gl (tuiles de 512 px) à la latitude de la ligne (~48,8°).
+// De près (zoom >= ZOOM_PLEIN) : modèle détaillé à la taille réelle. Entre ZOOM_PLEIN et ZOOM_DETAIL (15) : le même modèle, élargi progressivement jusqu'à ~10 px de large
+// (la longueur, déjà > 40 px, reste vraie). En dessous de ZOOM_DETAIL : modèle icône (rame élargie et rehaussée une fois pour toutes), agrandi en plus selon le zoom pour rester
+// visible : ~40 px de long et ~10 px de large (rame 25 fois plus longue que large : un agrandissement uniforme resterait un fil). Seuil à 15 décidé le 18/11 : le détaillé
+// agrandi aux zooms 12 à 14 était moins lisible que l'icône (page de comparaison). Mètres par pixel de deck.gl (tuiles de 512 px) à la latitude de la ligne (~48,8°).
 // Taille AGRANDIE de loin : pas à l'échelle.
-const ZOOM_DETAIL = 16, CIBLE_RAME_PX = 40, CIBLE_LARGEUR_PX = 10;
-const LONGUEUR_RAME_M = 104.05, LARGEUR_ICONE_M = 4.2;
+const ZOOM_DETAIL = 15, ZOOM_PLEIN = 16, CIBLE_RAME_PX = 40, CIBLE_LARGEUR_PX = 10;
+const LONGUEUR_RAME_M = 104.05, LARGEUR_ICONE_M = 4.2, LARGEUR_CAISSE_M = 2.798;
+// Palette de l'icône alignée sur le modèle détaillé (bandeau de vitres bleu-violet, bas de caisse sombre) pour que le passage au zoom 15 se voie peu.
+const PALETTE_ICONE = { bleu: [105, 128, 176], noir: [52, 56, 62] };
 function echelleTrain(zoom) {
   const metresParPixel = 78271.517 * Math.cos(48.8 * Math.PI / 180) / Math.pow(2, zoom);
   const borne = (v, max) => Math.min(max, Math.max(1, v));
-  if (zoom >= ZOOM_DETAIL) return { detail: true, longueur: 1, largeur: 1 };
+  if (zoom >= ZOOM_PLEIN) return { detail: true, longueur: 1, largeur: 1 };
+  if (zoom >= ZOOM_DETAIL) {   // détaillé élargi, de façon continue (lissage de 0 à 1 entre les deux zooms)
+    const t = (ZOOM_PLEIN - zoom) / (ZOOM_PLEIN - ZOOM_DETAIL), lisse = t * t * (3 - 2 * t);
+    return { detail: true, longueur: 1, largeur: 1 + (borne(CIBLE_LARGEUR_PX * metresParPixel / LARGEUR_CAISSE_M, 120) - 1) * lisse };
+  }
   return { detail: false, longueur: borne(CIBLE_RAME_PX * metresParPixel / LONGUEUR_RAME_M, 60), largeur: borne(CIBLE_LARGEUR_PX * metresParPixel / LARGEUR_ICONE_M, 120) };
 }
 // --- fin échelle du train
@@ -300,9 +308,9 @@ function voieDroite(lon, lat, cap) {
   return [[lon - Math.sin(a) * 200 / kx, lat - Math.cos(a) * 200 / ky], [lon + Math.sin(a) * 200 / kx, lat + Math.cos(a) * 200 / ky]];
 }
 
-// voie : [[lon, lat], ...] dans le sens de la marche ; (lon, lat) : centre de la rame (projeté sur la voie, prolongée en ligne droite aux deux bouts).
-// Renvoie les 4 caisses : [{ lon, lat, cap }] (cap en degrés, 0 = nord, sens horaire), ou null si la voie est inutilisable.
-function voituresSurVoie(voie, lon, lat) {
+// Projette le centre de la rame sur la voie : renvoie { kx, ky, s0, point(s) } (s0 = abscisse du centre le long de la voie, point(s) = [x, y] en mètres autour du centre, la voie
+// étant prolongée en ligne droite aux deux bouts), ou null si la voie est inutilisable.
+function projeterSurVoie(voie, lon, lat) {
   if (!voie || voie.length < 2) return null;
   const [kx, ky] = echellesLocales(lat);
   const P = voie.map(([x, y]) => [(x - lon) * kx, (y - lat) * ky]);
@@ -327,10 +335,27 @@ function voituresSurVoie(voie, lon, lat) {
     const L = cum[i + 1] - cum[i] || 1, u = (s - cum[i]) / L;   // u < 0 ou > 1 : prolongement droit
     return [P[i][0] + (P[i + 1][0] - P[i][0]) * u, P[i][1] + (P[i + 1][1] - P[i][1]) * u];
   };
+  return { kx, ky, s0, point };
+}
+
+// voie : [[lon, lat], ...] dans le sens de la marche ; (lon, lat) : centre de la rame (projeté sur la voie, prolongée en ligne droite aux deux bouts).
+// Renvoie les 4 caisses : [{ lon, lat, cap }] (cap en degrés, 0 = nord, sens horaire), ou null si la voie est inutilisable.
+function voituresSurVoie(voie, lon, lat) {
+  const pv = projeterSurVoie(voie, lon, lat);
+  if (!pv) return null;
+  const { kx, ky, s0, point } = pv;
   return CENTRES_VOITURES_M.map(c => {
     const [ax, ay] = point(s0 + c - DEMI_PIVOTS_M), [bx, by] = point(s0 + c + DEMI_PIVOTS_M);
     return { lon: lon + (ax + bx) / 2 / kx, lat: lat + (ay + by) / 2 / ky, cap: (Math.atan2(bx - ax, by - ay) * 180 / Math.PI + 360) % 360 };
   });
+}
+
+// Axe de la rame le long de la voie (queue -> tête), de -demi à +demi autour du centre : [[x, y], ...] en mètres autour du centre ; null si la voie est inutilisable.
+function axeSurVoie(voie, lon, lat, demi, pas = 8) {
+  const pv = projeterSurVoie(voie, lon, lat);
+  if (!pv) return null;
+  const n = Math.max(1, Math.ceil(2 * demi / pas));
+  return Array.from({ length: n + 1 }, (_, k) => pv.point(pv.s0 - demi + 2 * demi * k / n));
 }
 
 // Les caisses de tous les trains : un objet par caisse, avec les champs du train (clic, info-bulle, couleur) et son rang.
@@ -344,7 +369,68 @@ function voitures(p) {
 const orientationVoiture = d => [0, 90 - d.cap + (d.rang >= 2 ? 180 : 0), 0];
 // --- fin voitures
 
-// Couches d'un niveau de modèle (détaillé ou icône) : une couche par pièce (couleur). L'icône a un disque dessous, coloré selon l'état du train ;
+// --- contour
+// Contour d'état en « gélule » posé au sol autour de la rame (maquette validée le 18/11 : web/tableau-rendu.html) : un tracé par état, épaisseur en PIXELS constante, identique
+// de près et de loin ; plusieurs états = tracés emboîtés, le plus important au plus près de la rame. De près, un socle de la couleur de l'état (à quai, en route, terminus, données
+// anciennes) remplit la gélule : il remplace le disque de l'icône de loin. La gélule suit la voie (rame pliée en courbe).
+const PX_TRAIT = 2.4, PX_ECART = 3.5, PX_PULSE = 1.6, DEMI_LARGEUR_CAISSE_M = 1.45;
+const ROUGE_TERMINUS_VIF = [255, 60, 75];
+// États qui dessinent un contour, du plus important au moins important ; « retenu » (jaune, attente > 120 s) n'existe pas encore côté serveur.
+const contoursDeTrain = (t, selectionne) => [
+  t.terminus && { couleur: ROUGE_TERMINUS_VIF, pulse: true },
+  selectionne && { couleur: COULEUR_SELECTION, pulse: false },
+  t.donnees_anciennes && { couleur: GRIS, pulse: false },
+].filter(Boolean);
+
+// Contour fermé en mètres [x, y] autour de l'axe (queue -> tête) à la distance r : deux côtés parallèles et deux demi-cercles aux bouts.
+function gelule(axe, r, pasDeg = 15) {
+  const n = axe.length, cap = i => { const a = axe[Math.max(0, i - 1)], b = axe[Math.min(n - 1, i + 1)], dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1; return [dx / l, dy / l]; };
+  const gauche = [], droite = [];
+  axe.forEach((q, i) => { const [tx, ty] = cap(i); gauche.push([q[0] - ty * r, q[1] + tx * r]); droite.push([q[0] + ty * r, q[1] - tx * r]); });
+  const demiCercle = (c, [tx, ty]) => {   // de la gauche à la droite en passant par l'avant de la direction (tx, ty)
+    const h = Math.atan2(ty, tx) * 180 / Math.PI, pts = [];
+    for (let a = h + 90; a >= h - 90 - 1e-9; a -= pasDeg) pts.push([c[0] + r * Math.cos(a * Math.PI / 180), c[1] + r * Math.sin(a * Math.PI / 180)]);
+    return pts;
+  };
+  const avant = demiCercle(axe[n - 1], cap(n - 1)), arriere = demiCercle(axe[0], cap(0).map(v => -v));   // arrière : le même arc, direction inversée (de la droite vers la gauche de la rame)
+  const ferme = [...gauche, ...avant, ...droite.reverse(), ...arriere];
+  ferme.push(ferme[0]);
+  return ferme;
+}
+
+// Axe, demi-largeur et demi-longueur (mètres) de l'emprise d'un train : le long de la voie de près (modèle détaillé), droit selon le cap de loin (icône rigide).
+function empriseTrain(t, ech) {
+  const demiLarg = ech.detail ? DEMI_LARGEUR_CAISSE_M * ech.largeur : LARGEUR_ICONE_M / 2 * ech.largeur;
+  const demi = Math.max(0, LONGUEUR_RAME_M / 2 * ech.longueur - demiLarg);
+  const axeVoie = ech.detail ? (axeSurVoie(t.voie, t.lon, t.lat, demi) || axeSurVoie(voieDroite(t.lon, t.lat, t.cap), t.lon, t.lat, demi)) : null;
+  const a = (t.cap || 0) * Math.PI / 180;
+  return { demiLarg, axe: axeVoie || [[-Math.sin(a) * demi, -Math.cos(a) * demi], [Math.sin(a) * demi, Math.cos(a) * demi]] };
+}
+
+// Couches des socles et des contours. `p` : trains affichés (avec alpha) ; `ech` : échelle ; `mpp` : mètres par pixel ; `pulse` : 0 à 1 ; `selectionnee` : course sélectionnée.
+function calquesRames(p, ech, mpp, pulse, selectionnee) {
+  const lonLat = (t, q) => { const [kx, ky] = echellesLocales(t.lat); return [t.lon + q[0] / kx, t.lat + q[1] / ky]; };
+  const hauteur = ech.detail ? 0.4 : 0.4 * mpp;   // au-dessus du sol (de loin : ~0,4 px) ; le socle est juste dessous
+  const rames = p.map(t => ({ t, ...empriseTrain(t, ech), contours: contoursDeTrain(t, t.course === selectionnee) }));
+  const traits = rames.flatMap(({ t, axe, demiLarg, contours }) => contours.map((c, rang) => ({
+    chemin: gelule(axe, demiLarg + (PX_ECART + rang * (PX_TRAIT + PX_ECART)) * mpp).map(q => [...lonLat(t, q), hauteur]),
+    couleur: [...c.couleur, Math.round(255 * t.alpha)], largeur: PX_TRAIT + (c.pulse ? PX_PULSE * pulse : 0),
+  })));
+  const L = [];
+  if (ech.detail) {
+    L.push(new deck.PolygonLayer({
+      id: "rames-socle", data: rames, getPolygon: d => gelule(d.axe, d.demiLarg + PX_ECART * mpp).map(q => [...lonLat(d.t, q), 0.15]),
+      getFillColor: d => [...couleurTrain(d.t), Math.round(110 * d.t.alpha)], stroked: false, parameters: { depthWriteEnabled: false },
+    }));
+  }
+  L.push(new deck.PathLayer({
+    id: "rames-contour", data: traits, getPath: d => d.chemin, getColor: d => d.couleur, getWidth: d => d.largeur, widthUnits: "pixels", jointRounded: true, capRounded: true,
+  }));
+  return L;
+}
+// --- fin contour
+
+// Couches d'un niveau de modèle (détaillé ou icône) : une couche par pièce (couleur). L'icône a un disque dessous, coloré selon l'état du train (le détaillé a un socle, voir calquesRames) ;
 // les vitres du modèle détaillé sont semi-transparentes et dessinées en dernier sans écrire la profondeur.
 function calquesTrains(p, ech, couleurAlpha) {
   const matiere = { ambient: 0.55, diffuse: 0.65, shininess: 24, specularColor: [90, 90, 90] };
@@ -357,7 +443,7 @@ function calquesTrains(p, ech, couleurAlpha) {
         return new deck.SimpleMeshLayer({
           id: `trains-detail-${type}-${piece.nom}`, data: donnees, mesh: piece.maillage, getPosition: d => [d.lon, d.lat, 0],
           getColor: d => [...piece.couleur, Math.round((vitre ? 90 : 255) * d.alpha)],
-          getOrientation: orientationVoiture, sizeScale: 1, pickable: !vitre, material: matiere,
+          getOrientation: orientationVoiture, getScale: [1, ech.largeur, ech.largeur], updateTriggers: { getScale: [ech.largeur] }, sizeScale: 1, pickable: !vitre, material: matiere,
           parameters: vitre ? { depthWriteEnabled: false } : undefined,
         });
       });
@@ -368,7 +454,7 @@ function calquesTrains(p, ech, couleurAlpha) {
     const vitre = piece.nom === "vitre", disque = piece.nom === "disque";
     return new deck.SimpleMeshLayer({
       id: `trains-icone-${piece.nom}`, data: p, mesh: piece.maillage, getPosition: d => [d.lon, d.lat, 0],
-      getColor: d => disque ? couleurAlpha(d) : [...piece.couleur, Math.round((vitre ? 90 : 255) * d.alpha)],
+      getColor: d => disque ? couleurAlpha(d) : [...(PALETTE_ICONE[piece.nom] || piece.couleur), Math.round((vitre ? 90 : 255) * d.alpha)],
       getOrientation: orientation, getScale: echelle, updateTriggers: { getScale: [ech.longueur, ech.largeur], getColor: [] }, sizeScale: 1,
       pickable: !vitre, material: matiere,
       parameters: vitre ? { depthWriteEnabled: false } : undefined,
@@ -419,20 +505,9 @@ function calques(maintenant = performance.now()) {
       pickable: true,
     }));
   }
-  const auTerminus = p.filter(d => d.terminus);
-  if (auTerminus.length) {   // halo rouge brillant qui pulse autour des trains arrivés au terminus
-    const pulse = 0.5 + 0.5 * Math.sin(maintenant / 280);
-    L.push(new deck.ScatterplotLayer({
-      id: "terminus-halo", data: auTerminus, getPosition: d => [d.lon, d.lat], getRadius: 55, radiusUnits: "meters", radiusMinPixels: 16,   // ~ la demi-longueur de la rame
-      filled: true, stroked: true, getFillColor: d => [...ROUGE_TERMINUS, Math.round((40 + 50 * pulse) * d.alpha)], getLineColor: d => [255, 60, 75, Math.round((170 + 85 * pulse) * d.alpha)],
-      lineWidthMinPixels: 3, parameters: { depthCompare: "always" },
-    }));
-  }
-  if (selection) {
-    L.push(new deck.ScatterplotLayer({
-      id: "selection", data: p.filter(d => d.course === selection), getPosition: d => [d.lon, d.lat], getRadius: 1,
-      radiusMinPixels: 16, radiusMaxPixels: 16, filled: false, stroked: true, getLineColor: [245, 158, 11], lineWidthMinPixels: 3,
-    }));
+  if (mode !== "zone") {   // socle et contours d'état autour des rames (remplacent le halo rouge du terminus et l'anneau de sélection)
+    const mpp = 78271.517 * Math.cos(48.8 * Math.PI / 180) / Math.pow(2, zoom);
+    L.push(...calquesRames(p, echelleTrain(zoom), mpp, 0.5 + 0.5 * Math.sin(maintenant / 280), selection));
   }
   if (mode !== "zone") L.push(...calquesTrains(p, echelleTrain(zoom), couleurAlpha));
   if (vp && rg.bulles.length) {   // bulle « n » à côté du train chef ; son opacité est l'inverse de celle des trains qui s'effacent
