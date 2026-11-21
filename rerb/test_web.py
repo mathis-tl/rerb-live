@@ -682,7 +682,8 @@ class TestCodeCarte(unittest.TestCase):
         self.assertGreater(e["largeur"], e["longueur"], "la rame est 25 fois plus longue que large : la largeur est agrandie davantage")
         self.assertLessEqual(e["longueur"], 60)
         self.assertLessEqual(e["largeur"], 120)
-        self.assertLessEqual(e["hauteur"], 6, "pas de mur : la hauteur est plafonnée")
+        self.assertLessEqual(e["hauteur"], 14, "pas de mur : la hauteur est plafonnée")
+        self.assertGreaterEqual(self._echelle(8)["hauteur"], 10, "au plus grand dézoom la rame ne s'aplatit pas")
         self.assertGreaterEqual(e["hauteur"], 1)
 
     def test_hauteur_vraie_de_pres(self):

@@ -115,7 +115,7 @@ const MODELES = {
 // agrandi aux zooms 12 à 14 était moins lisible que l'icône (page de comparaison). Mètres par pixel de deck.gl (tuiles de 512 px) à la latitude de la ligne (~48,8°).
 // Taille AGRANDIE de loin : pas à l'échelle.
 const ZOOM_DETAIL = 15, ZOOM_PLEIN = 16, CIBLE_RAME_PX = 40, CIBLE_LARGEUR_PX = 10;
-const LONGUEUR_RAME_M = 104.05, LARGEUR_CAISSE_M = 2.798, HAUTEUR_MAX_ECHELLE = 6;
+const LONGUEUR_RAME_M = 104.05, LARGEUR_CAISSE_M = 2.798, HAUTEUR_MAX_ECHELLE = 14;
 function echelleTrain(zoom) {
   const metresParPixel = 78271.517 * Math.cos(48.8 * Math.PI / 180) / Math.pow(2, zoom);
   const borne = (v, max) => Math.min(max, Math.max(1, v));
