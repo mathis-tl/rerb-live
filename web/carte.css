@@ -80,3 +80,15 @@ select { font: inherit; width: 100%; padding: 4px 6px; margin-bottom: 4px; }
   #commandes-carte button[aria-pressed=true] { background: #2b6cb0; }
   #fiche-train .note, #fiche-train h3 { color: #a9b6c5; }
 }
+
+/* --- styles de carte à l'essai (A scan, B transport, C verre) */
+#styles-carte { position: absolute; top: 58px; left: 12px; z-index: 6; display: flex; gap: 4px; }
+#styles-carte button { margin: 0; padding: 5px 9px; font-size: 12px; background: rgba(255, 253, 248, .96); box-shadow: 0 1px 6px rgba(0, 0, 0, .25); }
+#styles-carte button[aria-pressed=true] { background: #2b6cb0; color: #fff; border-color: #2b6cb0; }
+#reperes-vue { display: none; position: absolute; top: 66px; left: 50%; transform: translateX(-50%); z-index: 4; pointer-events: none; white-space: nowrap;
+               font: 11px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .12em; color: rgba(255, 255, 255, .7); }
+html[data-style=scan] #reperes-vue { display: block; }
+html[data-style=scan] #carte::before, html[data-style=scan] #carte::after { content: ""; position: absolute; width: 26px; height: 26px; z-index: 4; pointer-events: none; }
+html[data-style=scan] #carte::before { left: 8px; bottom: 8px; border-left: 1px solid rgba(255, 255, 255, .6); border-bottom: 1px solid rgba(255, 255, 255, .6); }
+html[data-style=scan] #carte::after { right: 8px; bottom: 8px; border-right: 1px solid rgba(255, 255, 255, .6); border-bottom: 1px solid rgba(255, 255, 255, .6); }
+html[data-style=scan] #chargement, html[data-style=transport] #chargement, html[data-style=verre] #chargement { background: rgba(8, 12, 18, .9); color: #e8edf3; }

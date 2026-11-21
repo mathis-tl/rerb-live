@@ -62,6 +62,10 @@
     <p class="note">Positions estimées à partir des horaires PRIM, pas un GPS.</p>
     <button id="chargement-reessayer" type="button" hidden>Réessayer</button>
   </div>
+  <div id="styles-carte" role="group" aria-label="Style de la carte (essai)">
+    <button type="button" data-style="actuel">Actuel</button><button type="button" data-style="scan">A · Scan</button><button type="button" data-style="transport">B · Transport</button><button type="button" data-style="verre">C · Verre</button>
+  </div>
+  <div id="reperes-vue" aria-hidden="true"></div>
   <div id="etat-donnees" role="status" aria-live="polite" hidden></div>
   <div id="recherche-boite">
     <input id="recherche" type="search" placeholder="Chercher une gare…  ( / )" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="suggestions" aria-label="Chercher une gare">

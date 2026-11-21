@@ -224,10 +224,40 @@ const PALETTE = {
   sombre: { fond: "#161d28", sol: [30, 36, 48], vert: [28, 58, 48], eau: [24, 44, 86], bat: [44, 50, 66], bat_defaut: [74, 66, 56], quai: [92, 92, 150, 150],
             petit: [52, 60, 76], moyen: [62, 70, 88], grand: [86, 90, 108], pieton: [44, 50, 62], rail: [110, 118, 134] },
 };
-const palette = () => PALETTE[sombre.matches ? "sombre" : "clair"];
+
+// --- styles de carte
+// Trois habillages de décor à l'essai, à côté de l'actuel (qui reste le défaut). Choix par l'adresse (?style=scan|transport|verre) ou par les boutons de la carte.
+// Ils sont sombres par construction (la carte est sombre quel que soit le thème du système) ; le panneau de gauche n'est pas touché.
+const STYLES = ["actuel", "scan", "transport", "verre"];
+const styleDepuis = recherche => { const v = new URLSearchParams(recherche).get("style"); return STYLES.includes(v) ? v : "actuel"; };
+const DECORS = {
+  // A. carte de scan : noir, arêtes blanches fines, seul le réseau est en couleur
+  scan: { fond: "#000000", sol: [0, 0, 0], vert: [3, 9, 7], eau: [2, 7, 16], bat: [0, 0, 0, 150], bat_defaut: [0, 0, 0, 150], quai: [255, 255, 255, 24],
+          petit: [255, 255, 255, 40], moyen: [255, 255, 255, 64], grand: [255, 255, 255, 96], pieton: [255, 255, 255, 20], rail: [255, 255, 255, 120] },
+  // B. sobre « transport » : fond uni, bâtiments pleins très peu contrastés, la ligne en couleur
+  transport: { fond: "#0e131b", sol: [18, 23, 31], vert: [20, 38, 34], eau: [16, 30, 52], bat: [30, 36, 46], bat_defaut: [32, 37, 46], quai: [90, 100, 130, 120],
+               petit: [40, 48, 60], moyen: [52, 60, 74], grand: [70, 78, 94], pieton: [34, 40, 50], rail: [150, 160, 176] },
+  // C. verre et lumière : bâtiments translucides bleutés, halos sur les trains
+  verre: { fond: "#0a1020", sol: [14, 20, 38], vert: [16, 40, 48], eau: [20, 50, 100], bat: [110, 150, 220, 64], bat_defaut: [110, 150, 220, 64], quai: [140, 120, 255, 90],
+           petit: [40, 56, 90], moyen: [52, 70, 110], grand: [70, 90, 140], pieton: [36, 48, 80], rail: [130, 160, 220] },
+};
+// Réglages des bâtiments, de la voie de la ligne et des gares par style (null = rendu actuel inchangé).
+const RENDU = {
+  actuel: null,
+  scan: { fil: [255, 255, 255, 200], material: false, translucide: true, trace: { couleur: [255, 255, 255, 235], largeur: 5, halo: [255, 255, 255, 38] } },
+  transport: { fil: null, material: { ambient: 0.8, diffuse: 0.25, shininess: 2, specularColor: [20, 22, 28] }, trace: { couleur: [64, 150, 255, 255], largeur: 9, halo: null } },
+  verre: { fil: [170, 205, 255, 150], material: { ambient: 0.5, diffuse: 0.7, shininess: 60, specularColor: [190, 210, 255] }, translucide: true,
+           trace: { couleur: [120, 195, 255, 255], largeur: 7, halo: [90, 160, 255, 60] } },
+};
+// --- fin styles de carte
+let styleCarte = styleDepuis(location.search);
+const sombreActif = () => styleCarte !== "actuel" || sombre.matches;
+const palette = () => (styleCarte !== "actuel" ? DECORS[styleCarte] : PALETTE[sombre.matches ? "sombre" : "clair"]);
 function appliquerTheme() {
   document.getElementById("carte").style.background = (decor || indexDecor) ? palette().fond : "";
-  document.documentElement.dataset.theme = sombre.matches ? "sombre" : "clair";
+  document.documentElement.dataset.theme = sombreActif() ? "sombre" : "clair";
+  document.documentElement.dataset.style = styleCarte;
+  for (const b of document.querySelectorAll("#styles-carte button")) b.setAttribute("aria-pressed", String(b.dataset.style === styleCarte));
 }
 // Décor par cellules (web/data/decor/index.json + <cellule>.json, ~1,5 km chacune), chargées selon la vue à partir de ZOOM_DECOR.
 // Chaque cellule a ses propres couches (identifiant par cellule) : une cellule qui arrive ne redessine QUE elle, les autres gardent leur
@@ -304,14 +334,17 @@ function cellulesAMontrer() {
 }
 
 function calquesDecor() {
-  const c = palette(), theme = sombre.matches ? 1 : 0, L = [];
+  const c = palette(), theme = styleCarte + (sombre.matches ? 1 : 0), L = [], r = RENDU[styleCarte];
   const cellules = indexDecor ? cellulesAMontrer().map(k => [k, cellulesDecor.get(k)]) : (decor ? [["massy", decor]] : []);
   for (const [k, cell] of cellules) {
     L.push(new deck.PolygonLayer({ id: "surfaces-" + k, data: cell.surfaces, getPolygon: d => d.p, getFillColor: d => c[d.t], updateTriggers: { getFillColor: [theme] }, stroked: false, filled: true }));
     L.push(new deck.PathLayer({ id: "lignes-" + k, data: cell.lignes, getPath: d => d.c, getColor: d => c[d.t], getWidth: d => d.w, widthUnits: "meters", widthMinPixels: 0.6,
       capRounded: true, jointRounded: true, updateTriggers: { getColor: [theme] } }));
     L.push(new deck.PolygonLayer({ id: "batiments-" + k, data: cell.batiments, getPolygon: d => d.p, extruded: true, getElevation: d => d.h,
-      getFillColor: d => d.h_src === "defaut" ? c.bat_defaut : c.bat, updateTriggers: { getFillColor: [theme] }, material: { ambient: 0.55, diffuse: 0.6, shininess: 8, specularColor: [60, 64, 80] }, stroked: false }));
+      getFillColor: d => d.h_src === "defaut" ? c.bat_defaut : c.bat, updateTriggers: { getFillColor: [theme], getLineColor: [theme] },
+      material: r ? r.material : { ambient: 0.55, diffuse: 0.6, shininess: 8, specularColor: [60, 64, 80] }, stroked: false,
+      ...(r && r.fil ? { wireframe: true, getLineColor: r.fil, lineWidthMinPixels: 1 } : {}),
+      ...(r && r.translucide ? { parameters: { depthWriteEnabled: false } } : {}) }));
   }
   return L;
 }
@@ -446,6 +479,10 @@ function calquesRames(p, ech, mpp, pulse, selectionnee) {
     couleur: [...c.couleur, Math.round(255 * t.alpha)], largeur: PX_TRAIT + (c.pulse ? PX_PULSE * pulse : 0),
   })));
   const L = [];
+  if (styleCarte === "verre") L.push(new deck.ScatterplotLayer({
+    id: "rames-halo", data: rames, getPosition: d => [d.t.lon, d.t.lat], radiusUnits: "meters", getRadius: 70, radiusMinPixels: 14,
+    getFillColor: d => [...couleurTrain(d.t), Math.round(46 * d.t.alpha)], parameters: { depthWriteEnabled: false },
+  }));
   if (ech.detail) {
     L.push(new deck.PolygonLayer({
       id: "rames-socle", data: rames, getPolygon: d => gelule(d.axe, d.demiLarg + PX_ECART * mpp).map(q => [...lonLat(d.t, q), 0.15]),
@@ -495,20 +532,25 @@ function calques(maintenant = performance.now()) {
   const L = [];
   if (!geo) return L;
   L.push(...calquesDecor());
+  const rendu = RENDU[styleCarte], tr = rendu && rendu.trace;
+  if (tr && tr.halo) L.push(new deck.PathLayer({
+    id: "trace-halo", data: geo.trace, getPath: d => d, getColor: tr.halo, widthUnits: "meters", getWidth: tr.largeur * 5,
+    widthMinPixels: 8, capRounded: true, jointRounded: true, parameters: { depthWriteEnabled: false },
+  }));
   L.push(new deck.PathLayer({
-    id: "trace", data: geo.trace, getPath: d => d, getColor: [120, 132, 142], widthUnits: "meters", getWidth: 5,
-    widthMinPixels: 1.5, capRounded: true, jointRounded: true,
+    id: "trace", data: geo.trace, getPath: d => d, getColor: tr ? tr.couleur : [120, 132, 142], widthUnits: "meters", getWidth: tr ? tr.largeur : 5,
+    widthMinPixels: tr ? 2 : 1.5, capRounded: true, jointRounded: true, updateTriggers: { getColor: [styleCarte] },
   }));
   L.push(new deck.ScatterplotLayer({
     id: "gares", data: geo.gares, getPosition: d => [d.lon, d.lat], getRadius: 35, radiusMinPixels: 3, radiusMaxPixels: 9,
     getFillColor: [255, 255, 255], getLineColor: [29, 42, 51], stroked: true, lineWidthMinPixels: 1.2, pickable: true,
   }));
-  const nom = couleurNomGare();
+  const nom = styleCarte !== "actuel" ? COULEUR_NOM.sombre : couleurNomGare();
   L.push(new deck.TextLayer({
     id: "noms-gares", data: geo.gares, getPosition: d => [d.lon, d.lat], getText: d => d.nom, getSize: 13, sizeUnits: "pixels",
     getPixelOffset: [9, -9], getTextAnchor: "start", getColor: nom.texte, characterSet: "auto", fontFamily: "system-ui, sans-serif", fontWeight: 600,
     visible: zoom >= 11.5, background: false, outlineWidth: 4, outlineColor: nom.contour, fontSettings: { sdf: true }, pickable: true,
-    updateTriggers: { getColor: [sombre.matches], outlineColor: [sombre.matches] },
+    updateTriggers: { getColor: [sombre.matches, styleCarte], outlineColor: [sombre.matches, styleCarte] },
     parameters: { depthCompare: "always" },   // jamais cachés par les bâtiments extrudés (Cité Universitaire)
   }));
   const p0 = placesAffiches(maintenant);
@@ -610,6 +652,8 @@ function etapeCamera(maintenant) {   // appelée à chaque image : fait avancer 
 // Boutons : tourner (± 30°), incliner (± 10°), boussole (clic = nord en haut). Vol court, centre et zoom inchangés.
 function changerVue(dBearing, dPitch) { voler({ ...vueCarte, ...pasVue(vueCarte, dBearing, dPitch) }, 300); }
 function majBoussole() {
+  const hud = $("reperes-vue");
+  if (hud) hud.textContent = `CAP ${String(Math.round(((vueCarte.bearing || 0) % 360 + 360) % 360)).padStart(3, "0")}° · INCL ${String(Math.round(vueCarte.pitch || 0)).padStart(2, "0")}° · ZOOM ${(vueCarte.zoom || 0).toFixed(1)} · POSITIONS ESTIMÉES, PAS GPS`;
   const b = $("boussole");
   if (b) b.style.setProperty("--cap", `${-(vueCarte.bearing || 0)}deg`);
   const c = $("boussole-carte");
@@ -934,6 +978,13 @@ async function demarrer() {
   $("incliner-moins").addEventListener("click", () => changerVue(0, -10));
   $("boussole").addEventListener("click", () => changerVue(-(vueCarte.bearing || 0), 0));
   $("boussole-carte").addEventListener("click", () => changerVue(-(vueCarte.bearing || 0), 0));
+  for (const b of document.querySelectorAll("#styles-carte button")) b.addEventListener("click", () => {
+    styleCarte = b.dataset.style;
+    const u = new URL(location.href); if (styleCarte === "actuel") u.searchParams.delete("style"); else u.searchParams.set("style", styleCarte);
+    history.replaceState(null, "", u);
+    appliquerTheme(); afficher();
+  });
+  appliquerTheme();
   $("zoom-plus").addEventListener("click", () => voler({ ...vueCarte, zoom: vueCarte.zoom + 1 }, 300));
   $("zoom-moins").addEventListener("click", () => voler({ ...vueCarte, zoom: vueCarte.zoom - 1 }, 300));
   $("incliner-carte").addEventListener("click", () => voler({ ...vueCarte, pitch: vueCarte.pitch > 20 ? 0 : 60 }, 500));   // 2D / 3D

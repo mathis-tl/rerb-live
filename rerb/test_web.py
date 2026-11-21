@@ -155,6 +155,28 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("@keyframes tourner", css)
         self.assertIn("prefers-reduced-motion", css, "animation coupée si l'utilisateur le demande")
 
+    # --- styles de carte à l'essai
+    def _styles(self, expression):
+        return self._node("// --- styles de carte", "// --- fin styles de carte", expression)
+
+    def test_style_par_defaut_est_l_actuel_et_les_autres_sont_choisis_par_l_adresse(self):
+        self.assertEqual(self._styles('styleDepuis("")'), "actuel")
+        self.assertEqual(self._styles('styleDepuis("?style=inconnu")'), "actuel")
+        for st in ("scan", "transport", "verre"):
+            self.assertEqual(self._styles(f'styleDepuis("?style={st}")'), st)
+
+    def test_chaque_style_a_une_palette_complete_et_le_rendu_actuel_est_intact(self):
+        cles = self._styles("Object.keys(DECORS.scan).sort()")
+        for st in ("transport", "verre"):
+            self.assertEqual(self._styles(f"Object.keys(DECORS.{st}).sort()"), cles)
+        self.assertIsNone(self._styles("RENDU.actuel"), "l'actuel garde son rendu d'origine")
+        self.assertEqual(self._styles("DECORS.scan.fond"), "#000000")
+
+    def test_page_porte_les_boutons_de_style(self):
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        for st in ("actuel", "scan", "transport", "verre"):
+            self.assertIn(f'data-style="{st}"', html)
+
     def _echelle(self, zoom):
         return self._node("// --- échelle du train", "// --- fin échelle du train", f"echelleTrain({zoom})")
 
