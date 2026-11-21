@@ -388,14 +388,40 @@ class TestCodeCarte(unittest.TestCase):
         zdecor = float(re.search(r"ZOOM_DECOR = ([0-9.]+)", self.js).group(1))
         self.assertGreater(zd, zdecor, "au chargement, le décor (bâtiments) doit déjà s'afficher")
 
-    def test_deplacer_en_glissant_et_tourner_au_clic_droit_ou_maj(self):
-        self.assertIn('dragMode: modeGlisser', self.js)
-        self.assertIn('modeGlisser = "pan"', self.js, "par défaut le glisser déplace (Google Maps, Apple Plans)")
-        self.assertIn('e.key === "Shift"', self.js, "Maj enfoncée : tourner")
+    def test_glisser_deplace_clic_droit_ou_ctrl_tourne_sans_bouton_de_mode(self):
+        self.assertIn('dragMode: "pan"', self.js, "le glisser déplace toujours (Google Maps, Apple Plans, Google Earth)")
+        self.assertIn("dragRotate: true", self.js, "clic droit ou Ctrl + glisser tournent")
+        self.assertIn("touchRotate: true", self.js, "deux doigts tournent sur écran tactile")
+        for mort in ("modeGlisser", "reglerGlisser", "mode-glisser"):
+            self.assertNotIn(mort, self.js, f"plus de bascule de mode : {mort}")
         self.assertIn("inertia", self.js)
         html = (WEB / "index.html").read_text(encoding="utf-8")
-        for ident in ("mode-glisser", "zoom-plus", "zoom-moins", "boussole-carte", "incliner-carte"):
+        self.assertNotIn("mode-glisser", html)
+        for ident in ("zoom-plus", "zoom-moins", "boussole-carte", "incliner-carte"):
             self.assertIn(f'id="{ident}"', html, ident)
+
+    def test_deltaVue_glisser_horizontal_tourne_vertical_incline(self):
+        d = self._vue("deltaVue(100, 0)")
+        self.assertGreater(d["dBearing"], 0)
+        self.assertEqual(d["dPitch"], 0)
+        d = self._vue("deltaVue(0, -100)")
+        self.assertEqual(d["dBearing"], 0)
+        self.assertGreater(d["dPitch"], 0, "glisser vers le haut : on se rapproche de l'horizontale")
+        self.assertLess(self._vue("deltaVue(0, 100)")["dPitch"], 0)
+
+    def test_deltaVue_respecte_les_bornes_via_pasVue(self):
+        r = self._vue("(() => { const d = deltaVue(0, -10000); return pasVue({bearing: 0, pitch: 40}, d.dBearing, d.dPitch); })()")
+        self.assertEqual(r["pitch"], 85)
+        r = self._vue("(() => { const d = deltaVue(10000, 0); return pasVue({bearing: 0, pitch: 40}, d.dBearing, d.dPitch); })()")
+        self.assertTrue(0 <= r["bearing"] < 360)
+
+    def test_boussole_se_glisse_et_un_clic_remet_le_nord(self):
+        corps = self.js
+        self.assertIn('$("boussole-carte").addEventListener("pointerdown"', corps)
+        self.assertIn("setPointerCapture", corps)
+        self.assertIn("deltaVue(", corps.split('"boussole-carte").addEventListener("pointerdown"')[1])
+        css = (WEB / "carte.css").read_text(encoding="utf-8")
+        self.assertIn("touch-action: none", css.split("#boussole-carte")[1][:300])
 
     def test_zoom_molette_ne_coupe_pas_le_suivi(self):
         # deck.gl annonce isPanning aussi pendant un zoom à la molette (le point sous la souris bouge) : seul un vrai glisser arrête le suivi

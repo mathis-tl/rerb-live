@@ -147,6 +147,9 @@ const MAX_PITCH = 85;
 function pasVue(vue, dBearing, dPitch) {
   return { bearing: (((vue.bearing || 0) + dBearing) % 360 + 360) % 360, pitch: Math.min(MAX_PITCH, Math.max(0, (vue.pitch || 0) + dPitch)) };
 }
+// Glisser sur la boussole : horizontal = tourner, vertical (vers le haut) = se rapprocher de l'horizontale. Degrés par pixel parcouru.
+const DEG_CAP_PAR_PX = 0.6, DEG_INCL_PAR_PX = 0.4;
+function deltaVue(dx, dy) { return { dBearing: dx * DEG_CAP_PAR_PX, dPitch: -dy * DEG_INCL_PAR_PX }; }
 // --- fin vue 3D
 
 // --- hauteurs des bandes
@@ -605,11 +608,10 @@ let deckgl = null;
 function afficher(maintenant = performance.now()) { if (deckgl) deckgl.setProps({ layers: calques(maintenant) }); }
 
 // --- Vue : état piloté par nous (viewState contrôlé), pour que la caméra puisse suivre un train ou voler vers une gare sans combat avec deck.gl.
-// Déplacer = glisser (comme Google Maps / Apple Plans). Tourner / incliner = clic droit ou Maj + glisser, deux doigts, boutons, ou mode « Tourner ».
+// Déplacer = glisser (comme Google Maps / Google Earth). Tourner / incliner = clic droit ou Ctrl + glisser, deux doigts, glisser la boussole, ou boutons.
 const LIMITES_VUE = { minZoom: 8, maxZoom: 21, maxPitch: MAX_PITCH };
 const nettoyerVue = v => ({ longitude: v.longitude, latitude: v.latitude, zoom: v.zoom, pitch: v.pitch || 0, bearing: v.bearing || 0, ...LIMITES_VUE });
 let vue = nettoyerVue({ ...MASSY, zoom: ZOOM_DEPART, pitch: 55, bearing: 0 });
-let modeGlisser = "pan";   // « pan » : glisser déplace ; « rotate » : glisser tourne et incline
 
 function appliquerVue(v) {
   vue = nettoyerVue(v);
@@ -663,13 +665,7 @@ function majBoussole() {
   const c = $("boussole-carte");
   if (c) c.style.setProperty("--cap", `${-(vueCarte.bearing || 0)}deg`);
 }
-function reglerGlisser(m) {
-  modeGlisser = m;
-  if (deckgl) deckgl.setProps({ views: vueDeck() });
-  const b = $("mode-glisser");
-  if (b) { b.textContent = m === "rotate" ? "⟳ Tourner" : "✋ Déplacer"; b.setAttribute("aria-pressed", m === "rotate"); }
-}
-const vueDeck = () => new deck.MapView({ id: "carte", controller: { dragMode: modeGlisser, dragRotate: true, touchRotate: true, keyboard: true, inertia: 300, scrollZoom: { speed: 0.012, smooth: true } } });
+const vueDeck = () => new deck.MapView({ id: "carte", controller: { dragMode: "pan", dragRotate: true, touchRotate: true, keyboard: true, inertia: 300, scrollZoom: { speed: 0.012, smooth: true } } });
 
 // --- suivi d'un train / aller à une gare
 let suivi = null, vol = null;
@@ -876,7 +872,6 @@ async function actualiser() {
   majChargement(); panneau(); detail_train(); majFiche(); afficherProchains(); afficher(); animer();
 }
 
-let maj = false;
 
 // --- état du chargement
 let premiereReponse = false, debutAttente = performance.now(), reessai = false, reveil = false;
@@ -973,7 +968,6 @@ async function demarrer() {
   choix.addEventListener("change", () => { gareChoisie = choix.value; dernierePrevision = null; sequenceGare++; afficherProchains(); actualiserGare(); });
   creerDeck();
   chargerDecor();
-  reglerGlisser("pan");
   initialiserRecherche();
   $("vue-ligne").addEventListener("click", () => voler(boiteLigne(), 1400));
   $("tourner-gauche").addEventListener("click", () => changerVue(-30, 0));
@@ -981,17 +975,32 @@ async function demarrer() {
   $("incliner-plus").addEventListener("click", () => changerVue(0, 10));
   $("incliner-moins").addEventListener("click", () => changerVue(0, -10));
   $("boussole").addEventListener("click", () => changerVue(-(vueCarte.bearing || 0), 0));
-  $("boussole-carte").addEventListener("click", () => changerVue(-(vueCarte.bearing || 0), 0));
+  // boussole : un clic remet le nord en haut ; la glisser tourne (horizontal) et incline (vertical), pour les trackpads sans clic droit
+  let boussole = null, boussoleGlissee = false;
+  $("boussole-carte").addEventListener("pointerdown", e => {
+    boussole = { x: e.clientX, y: e.clientY, fait: false }; boussoleGlissee = false;
+    $("boussole-carte").setPointerCapture(e.pointerId);
+  });
+  $("boussole-carte").addEventListener("pointermove", e => {
+    if (!boussole) return;
+    const dx = e.clientX - boussole.x, dy = e.clientY - boussole.y;
+    if (!boussole.fait && Math.hypot(dx, dy) < 4) return;   // sous 4 px : c'est un clic
+    boussole.fait = boussoleGlissee = true; boussole.x = e.clientX; boussole.y = e.clientY;
+    const d = deltaVue(dx, dy);
+    vol = null;
+    appliquerVue({ ...vueCarte, ...pasVue(vueCarte, d.dBearing, d.dPitch) });
+    afficher();
+  });
+  const finBoussole = () => { boussole = null; };
+  $("boussole-carte").addEventListener("pointerup", finBoussole);
+  $("boussole-carte").addEventListener("pointercancel", finBoussole);
+  $("boussole-carte").addEventListener("click", () => { if (boussoleGlissee) { boussoleGlissee = false; return; } changerVue(-(vueCarte.bearing || 0), 0); });
   appliquerTheme();
   $("zoom-plus").addEventListener("click", () => voler({ ...vueCarte, zoom: vueCarte.zoom + 1 }, 300));
   $("zoom-moins").addEventListener("click", () => voler({ ...vueCarte, zoom: vueCarte.zoom - 1 }, 300));
   $("incliner-carte").addEventListener("click", () => voler({ ...vueCarte, pitch: vueCarte.pitch > 20 ? 0 : 60 }, 500));   // 2D / 3D
-  $("mode-glisser").addEventListener("click", () => reglerGlisser(modeGlisser === "pan" ? "rotate" : "pan"));
   $("fiche-suivi").addEventListener("click", () => { if (suivi === selection) arreterSuivi(); else suivreTrain(selection); });
   $("fiche-fermer").addEventListener("click", () => { selection = null; groupeOuvert = null; arreterSuivi(); detail_train(); afficherProchains(); afficher(); });
-  // Maj enfoncée : glisser tourne / incline (comme le clic droit), relâchée : glisser déplace
-  addEventListener("keydown", e => { if (e.key === "Shift" && modeGlisser === "pan" && !e.repeat && document.activeElement.tagName !== "INPUT") { maj = true; reglerGlisser("rotate"); } });
-  addEventListener("keyup", e => { if (e.key === "Shift" && maj) { maj = false; reglerGlisser("pan"); } });
   // vue de départ réglable par l'adresse : ?vue=longitude,latitude,zoom,inclinaison,cap (utile pour partager ou tester une vue)
   const v = new URLSearchParams(location.search).get("vue");
   if (v) {
