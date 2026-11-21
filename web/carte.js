@@ -271,7 +271,7 @@ function animer() {
     const maintenant = performance.now();
     etapeCamera(maintenant);   // vol de caméra ou suivi d'un train
     afficher(maintenant);
-    if (vol || suivi || trains.some(t => t.terminus || t.retenu) || [...affiches.values()].some(e => maintenant - e.t0 < e.duree)) animation = requestAnimationFrame(pas);
+    if (vol || suivi || cibleZoom || trains.some(t => t.terminus || t.retenu) || [...affiches.values()].some(e => maintenant - e.t0 < e.duree)) animation = requestAnimationFrame(pas);
   };
   animation = requestAnimationFrame(pas);
 }
@@ -689,6 +689,31 @@ function afficher(maintenant = performance.now()) { if (deckgl) deckgl.setProps(
 // Déplacer = glisser (comme Google Maps / Google Earth). Tourner / incliner = clic droit ou Ctrl + glisser, deux doigts, glisser la boussole, ou boutons.
 const LIMITES_VUE = { minZoom: 8, maxZoom: 21, maxPitch: MAX_PITCH };
 const nettoyerVue = v => ({ longitude: v.longitude, latitude: v.latitude, zoom: v.zoom, pitch: v.pitch || 0, bearing: v.bearing || 0, ...LIMITES_VUE });
+
+// --- zoom lisse
+// La molette (et l'inertie du trackpad, qui continue d'envoyer des événements après le lever des doigts) ne déplace plus la caméra : elle déplace une CIBLE de zoom, que la
+// caméra rejoint par amortissement exponentiel, image par image. Avant, deck.gl lissait chaque cran sur 250 ms mais nettoyerVue supprimait cette transition : le zoom avançait
+// par sauts bruts et irréguliers (mesure du 21/11 : pas de -0,29, 0, -0,39, 0, -0,23 par image).
+const TAU_ZOOM_MS = 90, SEUIL_ZOOM = 0.002, SEUIL_CENTRE_DEG = 1e-6;   // 1e-6 degré = environ 10 cm
+function lisserVers(courant, cible, dtMs) { return courant + (cible - courant) * (1 - Math.exp(-Math.max(0, dtMs) / TAU_ZOOM_MS)); }   // exacte quel que soit le rythme d'images
+// `recu` : vue calculée par deck.gl pour ce cran de molette, à partir de la vue COURANTE (zoom au point sous le curseur) ; son écart avec le courant est l'incrément du cran.
+function ajouterCibleZoom(cible, courant, recu) {
+  const base = cible || courant;
+  return {
+    zoom: Math.min(LIMITES_VUE.maxZoom, Math.max(LIMITES_VUE.minZoom, base.zoom + (recu.zoom - courant.zoom))),
+    longitude: base.longitude + (recu.longitude - courant.longitude), latitude: base.latitude + (recu.latitude - courant.latitude),
+  };
+}
+// Un pas de caméra vers la cible. `centreImpose` : centre du train suivi (le zoom reste centré sur lui). Renvoie { vue, fini } ; à la fin, accroché exactement à la cible.
+function etapeZoomLisse(courant, cible, dtMs, centreImpose) {
+  const zoom = lisserVers(courant.zoom, cible.zoom, dtMs);
+  const longitude = centreImpose ? centreImpose.longitude : lisserVers(courant.longitude, cible.longitude, dtMs);
+  const latitude = centreImpose ? centreImpose.latitude : lisserVers(courant.latitude, cible.latitude, dtMs);
+  const fini = Math.abs(cible.zoom - zoom) < SEUIL_ZOOM && (!!centreImpose || (Math.abs(cible.longitude - longitude) < SEUIL_CENTRE_DEG && Math.abs(cible.latitude - latitude) < SEUIL_CENTRE_DEG));
+  return fini ? { vue: { ...courant, zoom: cible.zoom, longitude: centreImpose ? centreImpose.longitude : cible.longitude, latitude: centreImpose ? centreImpose.latitude : cible.latitude }, fini: true }
+              : { vue: { ...courant, zoom, longitude, latitude }, fini: false };
+}
+// --- fin zoom lisse
 let vue = nettoyerVue({ longitude: CENTRE_VITRINE.lon, latitude: CENTRE_VITRINE.lat, zoom: ZOOM_DEPART, pitch: 60, bearing: 20 });
 
 function appliquerVue(v) {
@@ -720,9 +745,15 @@ function voler(cible, duree = 900) {   // cible : objet de vue, ou fonction qui 
 }
 // --- fin vol de caméra
 
-function etapeCamera(maintenant) {   // appelée à chaque image : fait avancer le vol, puis recale la caméra sur le train suivi
+let cibleZoom = null, dernierPasZoom = 0;
+function etapeCamera(maintenant) {   // appelée à chaque image : fait avancer le zoom lissé ou le vol, puis recale la caméra sur le train suivi
   let v = null;
-  if (vol) {
+  if (cibleZoom) {   // molette : la caméra rejoint la cible de zoom ; pendant un suivi le zoom reste centré sur le train
+    const dt = Math.min(64, maintenant - dernierPasZoom); dernierPasZoom = maintenant;
+    const e = etapeZoomLisse(vueCarte, cibleZoom, dt, suivi ? cibleSuivi() : null);
+    v = e.vue; dernierGeste = maintenant;
+    if (e.fini) cibleZoom = null;
+  } else if (vol) {
     const f = Math.min(1, (maintenant - vol.t0) / vol.duree), but = typeof vol.cible === "function" ? vol.cible() : vol.cible;
     v = etapeVol(vol.de, but, f, vol.dip);
     if (f >= 1) vol = null;
@@ -741,7 +772,7 @@ function majBoussole() {
   const c = $("boussole-carte");
   if (c) c.style.setProperty("--cap", `${-(vueCarte.bearing || 0)}deg`);
 }
-const vueDeck = () => new deck.MapView({ id: "carte", controller: { dragMode: "pan", dragRotate: true, touchRotate: true, keyboard: true, inertia: 300, scrollZoom: { speed: 0.012, smooth: true } } });
+const vueDeck = () => new deck.MapView({ id: "carte", controller: { dragMode: "pan", dragRotate: true, touchRotate: true, keyboard: true, inertia: 300, scrollZoom: { speed: 0.012, smooth: false } } });
 
 // --- suivi d'un train / aller à une gare
 let suivi = null, vol = null;
@@ -784,10 +815,17 @@ function creerDeck() {
     onViewStateChange: ({ viewState, interactionState }) => {
       const avantPas = pasZoom, avantNoms = zoom >= 11.5, avantCles = clesPretes().join();
       const i = interactionState || {};
+      const molette = i.isZooming && !i.isDragging;   // molette ou inertie du trackpad (le pincement à deux doigts, lui, suit les doigts sans lissage)
       // glisser pour déplacer = l'utilisateur prend la main, on ne suit plus (le zoom à la molette déplace aussi un peu : il ne compte pas)
       if (i.isDragging && i.isPanning && !i.isZooming) { if (suivi) arreterSuivi(); vol = null; }
       else if (i.isDragging || i.isZooming || i.isRotating) vol = null;
       if (i.isDragging || i.isZooming || i.isRotating) { vitrineMain = true; dernierGeste = performance.now(); }
+      if (molette) {   // le zoom n'est pas appliqué tel quel : il déplace la cible, que animer() rejoint en douceur
+        cibleZoom = ajouterCibleZoom(cibleZoom, vueCarte, viewState);
+        if (!animation) dernierPasZoom = performance.now();
+        animer(); return;
+      }
+      cibleZoom = null;
       appliquerVue(viewState); placerBulle();
       if (Math.round(zoom * 10) !== avantPas || (zoom >= 11.5) !== avantNoms || clesPretes().join() !== avantCles) afficher();
     },

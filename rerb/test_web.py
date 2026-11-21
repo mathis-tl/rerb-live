@@ -573,6 +573,66 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("DELAI_GESTE_MS", corps)
         self.assertIn("setTimeout(suite, DELAI_GESTE_MS)", corps)
 
+    # --- zoom lissé : la molette ne fait que déplacer une cible, la caméra la rejoint par amortissement exponentiel (mesure du 21/11 : sauts de zoom bruts
+    # de -0,29, 0, -0,39, 0, -0,23 par image avec l'inertie du trackpad, parce que la transition de deck.gl était supprimée par nettoyerVue)
+    def _zoomlisse(self, expression):
+        import json, shutil, subprocess
+        if not shutil.which("node"):
+            self.skipTest("node absent")
+        bloc = self.js.split("// --- zoom lisse")[1].split("// --- fin zoom lisse")[0]
+        sortie = subprocess.run(["node", "-e", "const LIMITES_VUE = { minZoom: 8, maxZoom: 21 };" + bloc + f"; console.log(JSON.stringify({expression}))"],
+                                capture_output=True, text=True, timeout=30, check=True).stdout
+        return json.loads(sortie)
+
+    def test_lissage_part_du_courant_et_converge_sans_depasser(self):
+        self.assertEqual(self._zoomlisse("lisserVers(10, 14, 0)"), 10)
+        r = self._zoomlisse("Array.from({ length: 40 }, (_, i) => i).reduce((a, _) => { const z = lisserVers(a.z, 14, 16.7); return { z, l: a.l.concat(z) }; }, { z: 10, l: [] }).l")
+        self.assertTrue(all(a < b for a, b in zip(r, r[1:])), "monotone : aucune inversion de sens")
+        self.assertLessEqual(max(r), 14, "pas de dépassement")
+        self.assertGreater(r[-1], 13.99)
+        pas = [b - a for a, b in zip(r, r[1:])]
+        self.assertTrue(all(a > b for a, b in zip(pas, pas[1:])), "freinage régulier, sans à-coup")
+
+    def test_lissage_independant_du_rythme_d_images(self):
+        deux = self._zoomlisse("lisserVers(lisserVers(10, 14, 8), 14, 8)")
+        une = self._zoomlisse("lisserVers(10, 14, 16)")
+        self.assertAlmostEqual(deux, une, places=9)
+
+    def test_la_molette_ajoute_son_increment_a_la_cible_au_lieu_de_la_remplacer(self):
+        r = self._zoomlisse("""(() => { const courant = { zoom: 15, longitude: 2.0, latitude: 48.0 };
+          let cible = ajouterCibleZoom(null, courant, { zoom: 14.8, longitude: 2.001, latitude: 48.0005 });
+          cible = ajouterCibleZoom(cible, courant, { zoom: 14.8, longitude: 2.001, latitude: 48.0005 });   // deux molettes avant que la caméra ait bougé
+          return cible; })()""")
+        self.assertAlmostEqual(r["zoom"], 14.6, places=9)
+        self.assertAlmostEqual(r["longitude"], 2.002, places=9)
+        self.assertAlmostEqual(r["latitude"], 48.001, places=9)
+
+    def test_cible_de_zoom_bornee(self):
+        self.assertEqual(self._zoomlisse("ajouterCibleZoom({ zoom: 20.9, longitude: 2, latitude: 48 }, { zoom: 20.9, longitude: 2, latitude: 48 }, { zoom: 21.4, longitude: 2, latitude: 48 }).zoom"), 21)
+        self.assertEqual(self._zoomlisse("ajouterCibleZoom(null, { zoom: 8.1, longitude: 2, latitude: 48 }, { zoom: 7.2, longitude: 2, latitude: 48 }).zoom"), 8)
+
+    def test_pas_de_zoom_rejoint_la_cible_puis_s_arrete(self):
+        r = self._zoomlisse("""(() => { let v = { longitude: 2, latitude: 48, zoom: 15, pitch: 60, bearing: 0 }; const cible = { zoom: 14, longitude: 2.01, latitude: 48.01 };
+          let n = 0, fini = false; while (!fini && n < 400) { const e = etapeZoomLisse(v, cible, 16.7, null); v = e.vue; fini = e.fini; n++; }
+          return { n, fini, zoom: v.zoom, longitude: v.longitude, pitch: v.pitch }; })()""")
+        self.assertTrue(r["fini"])
+        self.assertEqual(r["zoom"], 14, "accroché exactement à la cible à la fin")
+        self.assertEqual(r["longitude"], 2.01)
+        self.assertEqual(r["pitch"], 60)
+        self.assertLess(r["n"], 60, "moins d'une seconde")
+
+    def test_pendant_un_suivi_le_centre_reste_sur_le_train(self):
+        r = self._zoomlisse("""etapeZoomLisse({ longitude: 2, latitude: 48, zoom: 15, pitch: 60, bearing: 0 }, { zoom: 14, longitude: 9, latitude: 9 }, 16.7, { longitude: 2.5, latitude: 48.5 }).vue""")
+        self.assertEqual((r["longitude"], r["latitude"]), (2.5, 48.5))
+        self.assertLess(r["zoom"], 15)
+
+    def test_molette_branchee_sur_la_cible_pas_sur_la_vue(self):
+        gestionnaire = self.js.split("onViewStateChange:")[1].split("onClick:")[0]
+        self.assertIn("ajouterCibleZoom(", gestionnaire)
+        self.assertIn("smooth: false", self.js, "la transition de deck.gl est remplacée par la nôtre")
+        self.assertIn("cibleZoom", self.js.split("function animer(")[1].split("\n}\n")[0], "la boucle d'animation tourne tant que la cible n'est pas atteinte")
+        self.assertNotIn("garderTransition", self.js)
+
     def _echelle(self, zoom):
         return self._node("// --- échelle du train", "// --- fin échelle du train", f"echelleTrain({zoom})")
 
