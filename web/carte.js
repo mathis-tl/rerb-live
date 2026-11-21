@@ -37,18 +37,16 @@ function interrogationActive(cache) { return !cache; }
 // --- fin chargement
 
 // --- accueil
-// Carte de présentation au-dessus de la carte : titre, phrase, état du chargement, bouton « Voir les trains ».
-// vu : déjà présentée dans cette session (on ne garde alors que l'état du chargement, qui disparaît seul) ; recu : premières données reçues ;
-// ferme : le visiteur a cliqué sur « Voir les trains ».
-function etatAccueil({ vu, recu, ferme }) {
-  if (ferme) return { afficher: false, compact: false, bouton: false };
-  if (vu) return { afficher: !recu, compact: true, bouton: false };
-  return { afficher: true, compact: false, bouton: recu };
+// Carte de présentation au-dessus de la carte : titre, phrase, état du chargement, bouton « Voir les trains ». Identique à chaque chargement de la page
+// (aucune mémoire entre deux chargements : un rechargement rejoue la même arrivée).
+// recu : premières données reçues ; ferme : le visiteur a cliqué sur « Voir les trains ».
+function etatAccueil({ recu, ferme }) {
+  return { afficher: !ferme, bouton: !ferme && recu };
 }
 // --- fin accueil
 
 // --- vitrine
-// À la première visite, avant le clic, la caméra suit un train qui circule (la 3D est l'atout visuel du site) : de trois quarts, sans incertitude affichée.
+// À chaque chargement, avant le clic, la caméra suit un train qui circule (la 3D est l'atout visuel du site) : de trois quarts, sans incertitude affichée.
 const CENTRE_VITRINE = { lon: 2.2588, lat: 48.7255 };   // Massy-Palaiseau : voie à l'air libre, décor le plus fin ; à Paris la ligne est en tunnel
 // Train à montrer : en route, bien suivi par PRIM, placé, le plus proche de Massy (voie visible, décor détaillé) ; à défaut, n'importe quel train placé.
 function trainVitrine(liste, centre = CENTRE_VITRINE) {
@@ -59,7 +57,7 @@ function trainVitrine(liste, centre = CENTRE_VITRINE) {
   return choix ? choix.course : null;
 }
 const capVitrine = cap => (((cap == null ? 0 : cap) + 35) % 360 + 360) % 360;   // 35° d'écart avec la marche du train : vue de trois quarts
-const vitrineActive = ({ vu, ferme, sortie }) => !vu && !ferme && !sortie;
+const vitrineActive = ({ ferme, sortie }) => !ferme && !sortie;
 // --- fin vitrine
 const COULEURS = { "à quai": [47, 133, 90], "en route": [43, 108, 176] };
 const ROUGE_TERMINUS = [226, 34, 48];   // train arrivé au terminus (séjour de 60 s avant de disparaître)
@@ -762,15 +760,6 @@ function boiteLigne() {
 function sansTiretLong(s) { return s == null ? "" : String(s).replace(/[\u2013\u2014\u2212]/g, "-"); }
 // --- fin texte
 
-// --- interface
-// Trois directions visuelles à l'essai (version jour), choisies par ?ui=signaletique|atlas|technique ; la première est la valeur par défaut.
-const INTERFACES = ["signaletique", "atlas", "technique"];
-function interfaceDepuis(recherche) {
-  const v = new URLSearchParams(recherche).get("ui");
-  return INTERFACES.includes(v) ? v : INTERFACES[0];
-}
-// --- fin interface
-document.documentElement.dataset.ui = interfaceDepuis(location.search);
 // Police des textes dessinés par deck.gl : la même que celle de la page (variable CSS --f-carte), chargée avant le premier dessin.
 const policeCarte = () => getComputedStyle(document.documentElement).getPropertyValue("--f-carte").trim() || "sans-serif";
 const chargerPolices = () => Promise.race([
@@ -981,8 +970,8 @@ function afficherChargement(e) {
   $("chargement-message").textContent = e.message;
   $("chargement-reessayer").hidden = !e.reessayer;
 }
-let accueilFerme = false, accueilVu = false, accueilSortie = false, vitrineMain = false, vitrineCourse = null;
-const vitrineEnCours = () => vitrineActive({ vu: accueilVu, ferme: accueilFerme, sortie: accueilSortie });
+let accueilFerme = false, accueilSortie = false, vitrineMain = false, vitrineCourse = null;
+const vitrineEnCours = () => vitrineActive({ ferme: accueilFerme, sortie: accueilSortie });
 const mouvementReduit = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 function lancerVitrine() {   // caméra de suivi sur un train qui circule (jamais si le visiteur a pris la main)
   if (!vitrineEnCours() || vitrineMain || !premiereReponse) return;
@@ -994,12 +983,10 @@ function lancerVitrine() {   // caméra de suivi sur un train qui circule (jamai
   voler(() => ({ ...(cibleSuivi() || { longitude: t.lon, latitude: t.lat }), zoom: ZOOM_VITRINE, pitch: PITCH_VITRINE, bearing: cap }), mouvementReduit() ? 1 : 3200);
   afficher();
 }
-try { accueilVu = sessionStorage.getItem("accueil-vu") === "1"; } catch (e) { /* stockage de session indisponible : on présente à chaque chargement */ }
 function majAccueil() {
-  const e = etatAccueil({ vu: accueilVu, recu: premiereReponse, ferme: accueilFerme });
+  const e = etatAccueil({ recu: premiereReponse, ferme: accueilFerme });
   const a = $("accueil");
   a.hidden = !e.afficher;
-  a.classList.toggle("compact", e.compact);
   a.classList.toggle("sortie", accueilSortie);
   $("carte").classList.toggle("vitrine", vitrineEnCours() && e.afficher);
   $("accueil-entrer").disabled = !e.bouton;
@@ -1092,11 +1079,8 @@ async function demarrer() {
   choix.addEventListener("change", () => { gareChoisie = choix.value; dernierePrevision = null; sequenceGare++; afficherProchains(); actualiserGare(); });
   creerDeck();
   // ouverture : la caméra s'éloigne vers toute la ligne (sauf vue imposée par l'adresse ; sans animation si l'utilisateur la réduit)
-  // première visite : pas de vol vers toute la ligne, la caméra attend les données pour suivre un train (vitrine)
+  // ouverture : pas de vol vers toute la ligne, la caméra attend les données pour suivre un train (vitrine) ; vue imposée par l'adresse : on la garde
   if (new URLSearchParams(location.search).get("vue")) vitrineMain = true;
-  else if (!vitrineEnCours()) {
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) appliquerVue(boiteLigne()); else voler(boiteLigne(), 2600);
-  }
   chargerDecor();
   initialiserRecherche();
   $("vue-ligne").addEventListener("click", () => voler(boiteLigne(), 1400));
@@ -1137,13 +1121,12 @@ async function demarrer() {
     radio.checked = true; radio.dispatchEvent(new Event("change"));
   });
   $("accueil-entrer").addEventListener("click", () => {   // la carte de présentation part vers le haut ; la caméra continue de suivre le train
-    try { sessionStorage.setItem("accueil-vu", "1"); } catch (e) { /* tant pis : présentée à nouveau au prochain chargement */ }
     const fin = () => { accueilFerme = true; accueilSortie = false; majAccueil(); };
     accueilSortie = true; majAccueil(); afficher();
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) fin(); else setTimeout(fin, 550);
   });
   $("accueil-revoir").addEventListener("click", () => {
-    accueilFerme = false; accueilVu = false; accueilSortie = false; vitrineMain = false; vitrineCourse = null; $("d-apropos").open = false;
+    accueilFerme = false; accueilSortie = false; vitrineMain = false; vitrineCourse = null; $("d-apropos").open = false;
     majAccueil(); lancerVitrine(); afficher();
   });
   // vue de départ réglable par l'adresse : ?vue=longitude,latitude,zoom,inclinaison,cap (utile pour partager ou tester une vue)

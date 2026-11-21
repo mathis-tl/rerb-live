@@ -234,19 +234,17 @@ class TestCodeCarte(unittest.TestCase):
     def _accueil(self, expression):
         return self._node("// --- accueil", "// --- fin accueil", expression)
 
-    def test_accueil_premiere_visite_bouton_actif_quand_les_trains_sont_la(self):
-        self.assertEqual(self._accueil("etatAccueil({vu: false, recu: false, ferme: false})"), {"afficher": True, "compact": False, "bouton": False})
-        self.assertEqual(self._accueil("etatAccueil({vu: false, recu: true, ferme: false})"), {"afficher": True, "compact": False, "bouton": True})
-
-    def test_accueil_deja_vu_se_reduit_au_chargement_puis_disparait_seul(self):
-        self.assertEqual(self._accueil("etatAccueil({vu: true, recu: false, ferme: false})"), {"afficher": True, "compact": True, "bouton": False})
-        self.assertEqual(self._accueil("etatAccueil({vu: true, recu: true, ferme: false})")["afficher"], False)
+    def test_accueil_identique_a_chaque_chargement_bouton_actif_quand_les_trains_sont_la(self):
+        self.assertEqual(self._accueil("etatAccueil({recu: false, ferme: false})"), {"afficher": True, "bouton": False})
+        self.assertEqual(self._accueil("etatAccueil({recu: true, ferme: false})"), {"afficher": True, "bouton": True})
 
     def test_accueil_ferme_reste_ferme(self):
-        self.assertFalse(self._accueil("etatAccueil({vu: false, recu: true, ferme: true})")["afficher"])
+        self.assertFalse(self._accueil("etatAccueil({recu: true, ferme: true})")["afficher"])
 
-    def test_accueil_memorise_dans_la_session_et_respecte_la_reduction_des_animations(self):
-        self.assertIn("sessionStorage", self.js)
+    def test_rechargement_rejoue_toujours_la_meme_arrivee(self):
+        # aucune mémoire entre deux chargements : la présentation et la vitrine 3D reviennent à chaque fois
+        for interdit in ("sessionStorage", "localStorage", "accueil-vu", "accueilVu"):
+            self.assertNotIn(interdit, self.js, interdit)
         self.assertIn("prefers-reduced-motion", self.js)
 
     def test_page_sans_panneau_lateral_avec_accueil_et_volets_repliables(self):
@@ -389,10 +387,9 @@ class TestCodeCarte(unittest.TestCase):
         self.assertEqual(self._vitrine("capVitrine(10)"), 45)
         self.assertEqual(self._vitrine("capVitrine(null)"), 35)
 
-    def test_vitrine_seulement_a_la_premiere_visite_avant_le_clic(self):
-        f = lambda **k: self._vitrine("vitrineActive(%s)" % json.dumps({"vu": False, "ferme": False, "sortie": False, **k}))
+    def test_vitrine_a_chaque_chargement_jusqu_au_clic(self):
+        f = lambda **k: self._vitrine("vitrineActive(%s)" % json.dumps({"ferme": False, "sortie": False, **k}))
         self.assertTrue(f())
-        self.assertFalse(f(vu=True), "visite déjà faite dans la session")
         self.assertFalse(f(ferme=True))
         self.assertFalse(f(sortie=True), "dès que la carte part vers le haut, l'interface revient et l'incertitude aussi")
 
@@ -420,12 +417,12 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("prefers-reduced-motion", css)
         self.assertIn("matchMedia(\"(prefers-reduced-motion: reduce)\")", self.js.split('$("accueil-entrer").addEventListener')[1][:900])
 
-    def test_vitrine_pas_de_vol_vers_toute_la_ligne_a_la_premiere_visite(self):
+    def test_vitrine_pas_de_vol_vers_toute_la_ligne_a_l_ouverture(self):
         ouverture = self.js.split("// ouverture :")[1].split("chargerDecor();")[0]
-        self.assertIn("!vitrineEnCours()", ouverture)
+        self.assertNotIn("boiteLigne", ouverture)
 
     # --- design de la version jour (docs/anti-slop-design.md)
-    POLICES_LOCALES = {"Barlow", "Barlow Semi Condensed", "IBM Plex Mono", "IBM Plex Sans", "Public Sans", "Source Serif 4"}
+    POLICES_LOCALES = {"Barlow", "Barlow Semi Condensed", "IBM Plex Mono"}
     POLICES_BANNIES = ("system-ui", "-apple-system", "BlinkMacSystemFont", "Inter", "Roboto", "Poppins", "Space Grotesk", "DM Sans", "Arial", "Helvetica", "Segoe UI", "SF Pro")
 
     def _css(self):
@@ -484,12 +481,8 @@ class TestCodeCarte(unittest.TestCase):
             self.assertNotIn("reperes-vue", texte)
             self.assertNotIn("TARGET //", texte)
 
-    def _variables(self, direction):
-        css = self._css()
-        v = dict(re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", re.search(r":root\s*\{([^}]*)\}", css).group(1)))
-        if direction != "signaletique":
-            v.update(re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", re.search(r"html\[data-ui=%s\]\s*\{([^}]*)\}" % direction, css).group(1)))
-        return v
+    def _variables(self):
+        return dict(re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", re.search(r":root\s*\{([^}]*)\}", self._css()).group(1)))
 
     @staticmethod
     def _contraste(a, b):
@@ -500,21 +493,16 @@ class TestCodeCarte(unittest.TestCase):
         la, lb = sorted((lum(a), lum(b)), reverse=True)
         return (la + .05) / (lb + .05)
 
-    def test_trois_directions_et_textes_lisibles_sur_leur_surface(self):
-        for d in ("signaletique", "atlas", "technique"):
-            v = self._variables(d)
-            for texte in ("--encre", "--encre-2", "--accent"):
-                self.assertGreaterEqual(self._contraste(v[texte], v["--surface"]), 4.5, f"{d} : {texte} sur --surface")
-            self.assertGreaterEqual(self._contraste(v["--encre"], v["--surface-2"]), 4.5, f"{d} : --encre sur --surface-2")
-            self.assertGreaterEqual(self._contraste(v["--principal-texte"], v["--principal-fond"]), 4.5, f"{d} : bouton principal")
-        self.assertNotEqual(self._variables("atlas")["--f-titre"], self._variables("technique")["--f-titre"])
-
-    def test_interface_choisie_par_l_adresse(self):
-        f = lambda q: self._node("// --- interface", "// --- fin interface", f"interfaceDepuis({json.dumps(q)})")
-        self.assertEqual(f(""), "signaletique")
-        self.assertEqual(f("?ui=atlas"), "atlas")
-        self.assertEqual(f("?style=scan&ui=technique"), "technique")
-        self.assertEqual(f("?ui=inconnue"), "signaletique")
+    def test_direction_signaletique_seule_et_textes_lisibles_sur_leur_surface(self):
+        v = self._variables()
+        for texte in ("--encre", "--encre-2", "--accent"):
+            self.assertGreaterEqual(self._contraste(v[texte], v["--surface"]), 4.5, f"{texte} sur --surface")
+        self.assertGreaterEqual(self._contraste(v["--encre"], v["--surface-2"]), 4.5)
+        self.assertGreaterEqual(self._contraste(v["--principal-texte"], v["--principal-fond"]), 4.5, "bouton principal")
+        for mort in ("data-ui", "atlas", "technique", "Source Serif", "Public Sans", "IBM Plex Sans"):
+            self.assertNotIn(mort, self._css(), mort)
+        for mort in ("interfaceDepuis", "INTERFACES", "dataset.ui"):
+            self.assertNotIn(mort, self.js, mort)
 
     def _echelle(self, zoom):
         return self._node("// --- échelle du train", "// --- fin échelle du train", f"echelleTrain({zoom})")
