@@ -148,7 +148,7 @@ class TestCodeCarte(unittest.TestCase):
 
     def test_page_porte_l_ecran_de_chargement_accessible(self):
         html = (WEB / "index.html").read_text(encoding="utf-8")
-        self.assertRegex(html, r'id="chargement"[^>]*role="status"')
+        self.assertRegex(html, r'id="chargement"[^>]*role="status"')   # reste le bloc d'état dans l'accueil
         self.assertIn('id="chargement-reessayer"', html)
         self.assertIn('id="etat-donnees"', html)
         css = (WEB / "carte.css").read_text(encoding="utf-8")
@@ -210,6 +210,57 @@ class TestCodeCarte(unittest.TestCase):
         html = (WEB / "index.html").read_text(encoding="utf-8")
         self.assertNotIn('id="styles-carte"', html)
         self.assertIn("?style=", self.js, "le style reste choisissable par l'adresse")
+
+    # --- accueil et interface en cartes flottantes
+    def _accueil(self, expression):
+        return self._node("// --- accueil", "// --- fin accueil", expression)
+
+    def test_accueil_premiere_visite_bouton_actif_quand_les_trains_sont_la(self):
+        self.assertEqual(self._accueil("etatAccueil({vu: false, recu: false, ferme: false})"), {"afficher": True, "compact": False, "bouton": False})
+        self.assertEqual(self._accueil("etatAccueil({vu: false, recu: true, ferme: false})"), {"afficher": True, "compact": False, "bouton": True})
+
+    def test_accueil_deja_vu_se_reduit_au_chargement_puis_disparait_seul(self):
+        self.assertEqual(self._accueil("etatAccueil({vu: true, recu: false, ferme: false})"), {"afficher": True, "compact": True, "bouton": False})
+        self.assertEqual(self._accueil("etatAccueil({vu: true, recu: true, ferme: false})")["afficher"], False)
+
+    def test_accueil_ferme_reste_ferme(self):
+        self.assertFalse(self._accueil("etatAccueil({vu: false, recu: true, ferme: true})")["afficher"])
+
+    def test_accueil_memorise_dans_la_session_et_respecte_la_reduction_des_animations(self):
+        self.assertIn("sessionStorage", self.js)
+        self.assertIn("prefers-reduced-motion", self.js)
+
+    def test_page_sans_panneau_lateral_avec_accueil_et_volets_repliables(self):
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn("<aside", html)
+        self.assertNotIn('id="panneau"', html)
+        self.assertRegex(html, r'id="accueil"[^>]*role="dialog"')
+        for ident in ("d-prochains", "d-legende", "d-options", "d-apropos"):
+            m = re.search(rf'<details id="{ident}"([^>]*)>', html)
+            self.assertIsNotNone(m, ident)
+            self.assertNotIn("open", m.group(1), f"{ident} doit être replié au départ")
+        self.assertEqual(html.count("Train choisi"), 1, "une seule fiche de train (plus de doublon dans un panneau)")
+
+    def test_tous_les_identifiants_utilises_par_le_js_existent_dans_la_page(self):
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        presents = set(re.findall(r'id="([^"]+)"', html))
+        utilises = set(re.findall(r'\$\("([a-z0-9_-]+)"\)', self.js)) | set(re.findall(r'getElementById\("([a-z0-9_-]+)"\)', self.js))
+        self.assertEqual(sorted(utilises - presents), [])
+
+    def test_recherche_au_centre_en_haut(self):
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        barre = html.split('id="barre-haut"')[1].split("</div>\n  <div id=\"bandeaux\"")[0]
+        self.assertIn('id="recherche"', barre)
+        self.assertIn('id="direction-changer"', barre)
+        css = (WEB / "carte.css").read_text(encoding="utf-8")
+        regle = css.split("#barre-haut")[1].split("}")[0]
+        self.assertIn("left: 50%", regle)
+        self.assertIn("translateX(-50%)", regle)
+
+    def test_theme_clair_et_sombre_par_variables_css(self):
+        css = (WEB / "carte.css").read_text(encoding="utf-8")
+        self.assertIn("--verre:", css)
+        self.assertIn("prefers-color-scheme: dark", css)
 
     def _echelle(self, zoom):
         return self._node("// --- échelle du train", "// --- fin échelle du train", f"echelleTrain({zoom})")
@@ -324,7 +375,7 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("pasZoom", self.js)
         html = (WEB / "index.html").read_text(encoding="utf-8")
         self.assertIn("agrandi", html)
-        self.assertIn('name="direction"', html)
+        self.assertIn('id="direction-changer"', html, "la direction se change par le bouton du haut (plus de boutons radio dans un panneau)")
 
     def _interp(self, expression):
         return self._node("// --- interpolation", "// --- fin interpolation", expression)

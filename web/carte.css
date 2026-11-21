@@ -1,93 +1,139 @@
-:root { --fond: #e9e4d8; --encre: #1d2a33; --rer: #2b6cb0; }
+/* RER B en direct : carte plein écran, éléments en verre flottants. Thème clair / sombre selon le système (variables --verre, --texte…). */
+:root {
+  --fond: #e9e4d8; --rer: #2b6cb0;
+  --verre: rgba(255, 253, 248, .93); --verre-fort: rgba(255, 253, 248, .98); --verre-bord: #d9d2c3;
+  --texte: #1d2a33; --texte-doux: #44525c; --texte-titre: #5b6770;
+  --survol: #e3eefb; --ombre: 0 1px 6px rgba(0, 0, 0, .25); --ligne: #eee;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --verre: rgba(24, 30, 42, .9); --verre-fort: rgba(24, 30, 42, .97); --verre-bord: #3a4558;
+    --texte: #e8edf3; --texte-doux: #a9b6c5; --texte-titre: #8d9bab;
+    --survol: #2b3a55; --ombre: 0 1px 8px rgba(0, 0, 0, .5); --ligne: #2c3647;
+  }
+}
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
-body { font: 15px/1.4 system-ui, sans-serif; color: var(--encre); background: var(--fond); display: flex; }
-#panneau { width: 340px; flex: none; padding: 14px 16px; overflow: auto; background: #fffdf8; border-right: 1px solid #d9d2c3; }
-#carte { position: relative; flex: 1; background: linear-gradient(#cfd8de, #e9e4d8); }
+body { font: 15px/1.4 system-ui, sans-serif; color: var(--texte); background: var(--fond); }
+#carte { position: absolute; inset: 0; background: linear-gradient(#cfd8de, #e9e4d8); overflow: hidden; }
 h1 { font-size: 17px; margin: 0 0 6px; }
-h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin: 16px 0 6px; color: #5b6770; }
-.note { font-size: 13px; color: #44525c; }
-.bandeau { background: #fff3cd; border: 1px solid #e6c860; padding: 6px 8px; border-radius: 6px; font-size: 13px; margin: 8px 0; }
-.bandeau.erreur { background: #fde8e8; border-color: #e08a8a; }
-label.choix { display: block; padding: 5px 8px; border: 1px solid #d9d2c3; border-radius: 6px; margin: 4px 0; cursor: pointer; background: #fff; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin: 14px 0 6px; color: var(--texte-titre); }
+h2:first-child { margin-top: 0; }
+.note { font-size: 13px; color: var(--texte-doux); }
+p.note { margin: 0 0 8px; }
+button { font: inherit; padding: 4px 9px; margin: 2px 4px 2px 0; border: 1px solid var(--verre-bord); border-radius: 8px; background: var(--verre-fort); color: var(--texte); cursor: pointer; }
+button:hover { background: var(--survol); }
+button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--rer); outline-offset: 2px; }
+button:disabled { opacity: .5; cursor: default; }
+select { font: inherit; width: 100%; padding: 4px 6px; margin-bottom: 4px; background: var(--verre-fort); color: var(--texte); border: 1px solid var(--verre-bord); border-radius: 6px; }
+label.choix { display: block; padding: 5px 8px; border: 1px solid var(--verre-bord); border-radius: 8px; margin: 4px 0; cursor: pointer; background: var(--verre-fort); }
 label.choix input { margin-right: 6px; }
-button { font: inherit; padding: 4px 9px; margin: 2px 4px 2px 0; border: 1px solid #b9b19f; border-radius: 6px; background: #fff; cursor: pointer; }
-button:hover { background: #eef; }
-input[type=range] { width: 100%; }
-#legende { position: fixed; left: 356px; bottom: 12px; background: rgba(255, 253, 248, .93); border: 1px solid #d9d2c3;
-           border-radius: 8px; padding: 8px 10px; font-size: 13px; z-index: 5; }
+
+/* --- bandeaux (démo, erreur) */
+#bandeaux { position: absolute; top: 62px; left: 50%; transform: translateX(-50%); z-index: 5; width: min(560px, calc(100% - 200px)); }
+.bandeau { background: #fff3cd; color: #3b2f00; border: 1px solid #e6c860; padding: 6px 10px; border-radius: 10px; font-size: 13px; margin: 0 0 6px; box-shadow: var(--ombre); }
+.bandeau.erreur { background: #fde8e8; color: #4a1313; border-color: #e08a8a; }
+.bandeau[hidden] { display: none; }
+
+/* --- haut centre : recherche de gare et direction */
+#barre-haut { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; align-items: flex-start; gap: 10px; max-width: calc(100% - 200px); }
+#recherche-boite { position: relative; width: 300px; flex: none; }
+#recherche { width: 100%; padding: 9px 14px; font: inherit; color: var(--texte); border: 1px solid var(--verre-bord); border-radius: 22px; background: var(--verre-fort); box-shadow: var(--ombre); }
+#suggestions { position: absolute; left: 0; right: 0; list-style: none; margin: 4px 0 0; padding: 4px 0; background: var(--verre-fort); border: 1px solid var(--verre-bord); border-radius: 12px; box-shadow: 0 2px 10px rgba(0, 0, 0, .3); max-height: 320px; overflow: auto; }
+#suggestions li { padding: 7px 14px; cursor: pointer; }
+#suggestions li.actif { background: var(--survol); }
+#suggestions li.vide { color: var(--texte-titre); cursor: default; }
+#direction-boite { background: var(--verre); border: 1px solid var(--verre-bord); border-radius: 22px; padding: 4px 6px 4px 14px; box-shadow: var(--ombre); white-space: nowrap; font-weight: 600;
+  backdrop-filter: blur(8px); font-size: 14px; line-height: 30px; }
+#direction-boite button { margin: 0 0 0 8px; border-radius: 16px; }
+
+/* --- droite : commandes de la carte */
+#commandes-carte { position: absolute; top: 12px; right: 12px; z-index: 5; display: flex; flex-direction: column; gap: 6px; }
+#commandes-carte button { margin: 0; min-width: 42px; padding: 8px 6px; background: var(--verre); box-shadow: var(--ombre); font-weight: 600; backdrop-filter: blur(8px); }
+#boussole-carte { touch-action: none; cursor: grab; }
+#boussole-carte:active { cursor: grabbing; }
+.aiguille { display: inline-block; color: #c53030; transform: rotate(var(--cap, 0deg)); }
+
+/* --- fiches flottantes (train choisi, liste d'une bulle de trains proches) */
+#fiche-train, #fiche-groupe { position: absolute; top: 64px; right: 84px; z-index: 5; width: 290px; max-height: calc(100% - 90px); overflow: auto; padding: 10px 12px;
+  background: var(--verre-fort); border: 1px solid var(--verre-bord); border-radius: 12px; box-shadow: 0 2px 10px rgba(0, 0, 0, .3); }
+#fiche-train h3, #fiche-groupe h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--texte-titre); margin: 0 0 6px; }
+#fiche-train[hidden], #fiche-groupe[hidden], #suggestions[hidden] { display: none; }
+
+/* --- bas gauche : volets dépliables (repliés au départ) */
+#dock { position: absolute; left: 12px; bottom: 12px; z-index: 5; width: 340px; max-width: calc(100% - 24px); max-height: calc(100% - 90px); overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+#dock details { background: var(--verre); border: 1px solid var(--verre-bord); border-radius: 12px; box-shadow: var(--ombre); backdrop-filter: blur(8px); }
+#dock summary { cursor: pointer; padding: 8px 14px; font-weight: 600; font-size: 14px; list-style: none; display: flex; justify-content: space-between; align-items: center; }
+#dock summary::-webkit-details-marker { display: none; }
+#dock summary::after { content: "▴"; font-size: 11px; color: var(--texte-titre); }
+#dock details[open] summary::after { content: "▾"; }
+#dock .corps { padding: 2px 14px 12px; max-height: 46vh; overflow: auto; }
+#legende { font-size: 13px; }
+#legende > b { display: block; margin-bottom: 3px; }
+#legende .note { display: block; margin: 3px 0; }
 #source-decor { display: block; font-size: 11px; }
-#legende b { display: block; margin-bottom: 3px; }
-.pastille { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin: 0 4px 0 8px; vertical-align: -1px; }
+#legende-hauteurs { display: block; font-size: 12px; margin-top: 3px; }
+.pastille { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin: 0 4px 0 0; vertical-align: -1px; }
 .pastille.contour { background: transparent; border: 2.4px solid; }
 .pastille.zone { background: rgba(214, 158, 46, .5); border: 1px solid #b7791f; }
-#legende-hauteurs { display: block; font-size: 12px; margin-top: 3px; }
 .pastille.carre { border-radius: 2px; border: 1px solid #9a9aa0; }
 .pastille.bat-mesure { background: rgb(214, 214, 216); }
 .pastille.bat-defaut { background: rgb(222, 204, 176); }
-select { font: inherit; width: 100%; padding: 4px 6px; margin-bottom: 4px; }
 #prochains { width: 100%; border-collapse: collapse; font-size: 13px; }
-#prochains td { padding: 3px 4px; border-bottom: 1px solid #eee; vertical-align: top; }
-#prochains tr.ligne { cursor: pointer; } #prochains tr.ligne:hover { background: #eef4fb; }
-#prochains tr.choisi { background: #fff3cd; } #prochains .heure { font-weight: 600; white-space: nowrap; }
-.retard { color: #b83232; } .ponctuel { color: #2f855a; } .badge { display: inline-block; font-size: 11px; padding: 0 5px; border-radius: 8px; background: #2f855a; color: #fff; }
+#prochains td { padding: 3px 4px; border-bottom: 1px solid var(--ligne); vertical-align: top; }
+#prochains tr.ligne { cursor: pointer; } #prochains tr.ligne:hover { background: var(--survol); }
+#prochains tr.choisi { background: rgba(250, 204, 21, .25); } #prochains .heure { font-weight: 600; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+.retard { color: #c24141; } .ponctuel { color: #2f855a; } .badge { display: inline-block; font-size: 11px; padding: 0 5px; border-radius: 8px; background: #2f855a; color: #fff; }
 .badge.annule { background: #b83232; }
-.special { padding: 3px 0; border-bottom: 1px dashed #d9d2c3; font-size: 13px; }
-.special .motif { color: #7a5c00; }
+.special { padding: 3px 0; border-bottom: 1px dashed var(--verre-bord); font-size: 13px; }
+.special .motif { color: #b08400; }
+#commandes-vue { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 4px; }
+#commandes-vue button { min-width: 38px; margin: 0; }
 
-#commandes-vue { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
-#commandes-vue button { min-width: 38px; }
-#boussole .aiguille { display: inline-block; color: #c53030; transform: rotate(var(--cap, 0deg)); transition: transform 0.3s; }
+/* --- état des données (pastille en bas au centre) */
+#etat-donnees { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 6; padding: 6px 14px; border-radius: 16px; font-size: 13px;
+  background: var(--verre-fort); border: 1px solid var(--verre-bord); box-shadow: var(--ombre); }
+#etat-donnees[hidden] { display: none; }
+#etat-donnees[data-type=erreur], #etat-donnees[data-type=bloque] { background: #fde8e8; color: #4a1313; border-color: #e08a8a; }
 
-/* --- commandes posées sur la carte (recherche, direction, vue, fiche du train) */
-#recherche-boite { position: absolute; top: 12px; left: 12px; width: 300px; z-index: 6; }
-#recherche { width: 100%; padding: 9px 12px; font: inherit; border: 1px solid #b9b19f; border-radius: 22px; background: rgba(255, 253, 248, .96); box-shadow: 0 1px 6px rgba(0, 0, 0, .25); }
-#suggestions { list-style: none; margin: 4px 0 0; padding: 4px 0; background: rgba(255, 253, 248, .98); border: 1px solid #d9d2c3; border-radius: 10px; box-shadow: 0 2px 10px rgba(0, 0, 0, .3); max-height: 320px; overflow: auto; }
-#suggestions li { padding: 7px 14px; cursor: pointer; }
-#suggestions li.actif { background: #e3eefb; }
-#suggestions li.vide { color: #5b6770; cursor: default; }
-#direction-boite { position: absolute; top: 12px; left: 328px; z-index: 5; background: rgba(255, 253, 248, .96); border: 1px solid #d9d2c3;
-  border-radius: 22px; padding: 5px 6px 5px 14px; box-shadow: 0 1px 6px rgba(0, 0, 0, .25); white-space: nowrap; font-weight: 600; }
-#direction-boite button { margin-left: 8px; }
-#commandes-carte { position: absolute; top: 12px; right: 12px; z-index: 5; display: flex; flex-direction: column; gap: 6px; }
-#commandes-carte button { margin: 0; min-width: 42px; padding: 8px 6px; background: rgba(255, 253, 248, .96); box-shadow: 0 1px 6px rgba(0, 0, 0, .25); font-weight: 600; }
-#commandes-carte button[aria-pressed=true] { background: #2b6cb0; color: #fff; border-color: #2b6cb0; }
-#boussole-carte { touch-action: none; cursor: grab; }
-#boussole-carte:active { cursor: grabbing; }
-#boussole-carte .aiguille { display: inline-block; color: #c53030; transform: rotate(var(--cap, 0deg)); }
-#fiche-train { position: absolute; top: 62px; right: 124px; z-index: 5; width: 290px; max-height: calc(100% - 40px); overflow: auto; padding: 10px 12px;
-  background: rgba(255, 253, 248, .97); border: 1px solid #d9d2c3; border-radius: 10px; box-shadow: 0 2px 10px rgba(0, 0, 0, .3); }
-#fiche-train h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #5b6770; margin: 0 0 6px; }
-#fiche-train[hidden], #suggestions[hidden] { display: none; }
-#chargement { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
-              background: rgba(233, 228, 216, .92); text-align: center; padding: 20px; }
-#chargement[hidden], #etat-donnees[hidden] { display: none; }
-#chargement p { margin: 0; font-size: 16px; max-width: 420px; }
-#chargement p.note { font-size: 13px; }
-#chargement button { margin-top: 12px; padding: 8px 16px; }
-.roue { width: 44px; height: 44px; margin-bottom: 12px; border: 5px solid #c9d3dc; border-top-color: var(--rer); border-radius: 50%; animation: tourner 1s linear infinite; }
+/* --- arrivée : carte de présentation en verre sombre au-dessus de la carte */
+#accueil { position: absolute; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 20px;
+  background: radial-gradient(ellipse at center, rgba(8, 12, 18, .35), rgba(8, 12, 18, .72)); backdrop-filter: blur(3px); }
+#accueil[hidden] { display: none; }
+.carte-accueil { width: min(460px, 100%); padding: 30px 32px 24px; border-radius: 20px; text-align: center; color: #f2f5f9;
+  background: rgba(14, 18, 26, .78); border: 1px solid rgba(255, 255, 255, .14); box-shadow: 0 10px 40px rgba(0, 0, 0, .5); backdrop-filter: blur(16px); }
+.carte-accueil h1 { font-size: 34px; line-height: 1.1; font-weight: 600; letter-spacing: -.02em; margin: 0 0 10px; }
+.carte-accueil .phrase { margin: 0 auto 6px; max-width: 380px; font-size: 15px; color: #c5d0dc; }
+.carte-accueil .aide { margin: 16px 0 0; font: 11px/1.4 var(--mono); letter-spacing: .06em; color: #8d9bab; }
+#chargement { display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 18px 0 14px; min-height: 64px; justify-content: center; }
+#chargement[hidden] { display: none; }
+#chargement p { margin: 0; font-size: 14px; max-width: 380px; }
+.roue { width: 30px; height: 30px; margin-bottom: 8px; border: 4px solid rgba(255, 255, 255, .2); border-top-color: #6aa7e6; border-radius: 50%; animation: tourner 1s linear infinite; }
 #chargement[data-type=echec] .roue, #chargement[data-type=bloque] .roue { display: none; }
 @keyframes tourner { to { transform: rotate(360deg); } }
-#etat-donnees { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 6; padding: 6px 14px; border-radius: 16px; font-size: 13px;
-                background: rgba(255, 253, 248, .96); border: 1px solid #d9d2c3; box-shadow: 0 1px 6px rgba(0, 0, 0, .25); }
-#etat-donnees[data-type=erreur], #etat-donnees[data-type=bloque] { background: #fde8e8; border-color: #e08a8a; }
 @media (prefers-reduced-motion: reduce) { .roue { animation-duration: 4s; } }
-@media (prefers-color-scheme: dark) {
-  #chargement { background: rgba(20, 26, 36, .92); color: #e8edf3; }
-  #chargement .note { color: #a9b6c5; }
-  .roue { border-color: #3a4558; border-top-color: #6aa7e6; }
-  #etat-donnees { background: rgba(28, 34, 46, .96); color: #e8edf3; border-color: #3a4558; }
-  #recherche, #suggestions, #direction-boite, #commandes-carte button, #fiche-train { background: rgba(28, 34, 46, .96); color: #e8edf3; border-color: #3a4558; }
-  #suggestions li.actif { background: #2b3a55; }
-  #commandes-carte button[aria-pressed=true] { background: #2b6cb0; }
-  #fiche-train .note, #fiche-train h3 { color: #a9b6c5; }
-}
+.carte-accueil button { border-color: rgba(255, 255, 255, .25); background: rgba(255, 255, 255, .1); color: #f2f5f9; }
+.carte-accueil button:hover { background: rgba(255, 255, 255, .2); }
+.carte-accueil .principal { margin: 4px 0 0; padding: 11px 26px; border: 0; border-radius: 999px; background: #fff; color: #10151d; font-weight: 600; font-size: 15px; }
+.carte-accueil .principal:hover { background: #e8eef5; }
+.carte-accueil .principal:disabled { background: rgba(255, 255, 255, .25); color: rgba(255, 255, 255, .75); }
+#accueil.compact .carte-accueil { width: auto; padding: 14px 26px; }
+#accueil.compact h1, #accueil.compact .phrase, #accueil.compact .principal, #accueil.compact .aide { display: none; }
+#accueil.compact #chargement { margin: 0; min-height: 0; }
 
-/* --- styles de carte à l'essai (A scan, B transport, C verre) */
+/* --- repères de la vue (utilisés seulement par le style d'essai « scan », ?style=scan) */
 #reperes-vue { display: none; position: absolute; top: 66px; left: 50%; transform: translateX(-50%); z-index: 4; pointer-events: none; white-space: nowrap;
-               font: 11px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .12em; color: rgba(255, 255, 255, .7); }
+  font: 11px/1 var(--mono); letter-spacing: .12em; color: rgba(255, 255, 255, .7); }
 html[data-style=scan] #reperes-vue { display: block; }
 html[data-style=scan] #carte::before, html[data-style=scan] #carte::after { content: ""; position: absolute; width: 26px; height: 26px; z-index: 4; pointer-events: none; }
 html[data-style=scan] #carte::before { left: 8px; bottom: 8px; border-left: 1px solid rgba(255, 255, 255, .6); border-bottom: 1px solid rgba(255, 255, 255, .6); }
 html[data-style=scan] #carte::after { right: 8px; bottom: 8px; border-right: 1px solid rgba(255, 255, 255, .6); border-bottom: 1px solid rgba(255, 255, 255, .6); }
-html[data-style=scan] #chargement, html[data-style=transport] #chargement, html[data-style=verre] #chargement { background: rgba(8, 12, 18, .9); color: #e8edf3; }
+
+/* --- petits écrans (version mobile à venir : ici seulement de quoi ne pas déborder) */
+@media (max-width: 760px) {
+  #barre-haut { max-width: calc(100% - 80px); flex-direction: column; align-items: stretch; left: 12px; transform: none; }
+  #recherche-boite { width: 100%; }
+  #bandeaux { top: 112px; width: calc(100% - 100px); left: 12px; transform: none; }
+  #fiche-train, #fiche-groupe { right: 12px; top: auto; bottom: 70px; width: calc(100% - 24px); }
+}

@@ -35,6 +35,17 @@ function etatDonnees({ enCours, ageS, erreur, bloque, reveil }) {
 }
 function interrogationActive(cache) { return !cache; }
 // --- fin chargement
+
+// --- accueil
+// Carte de présentation au-dessus de la carte : titre, phrase, état du chargement, bouton « Voir les trains ».
+// vu : déjà présentée dans cette session (on ne garde alors que l'état du chargement, qui disparaît seul) ; recu : premières données reçues ;
+// ferme : le visiteur a cliqué sur « Voir les trains ».
+function etatAccueil({ vu, recu, ferme }) {
+  if (ferme) return { afficher: false, compact: false, bouton: false };
+  if (vu) return { afficher: !recu, compact: true, bouton: false };
+  return { afficher: true, compact: false, bouton: recu };
+}
+// --- fin accueil
 const COULEURS = { "à quai": [47, 133, 90], "en route": [43, 108, 176] };
 const ROUGE_TERMINUS = [226, 34, 48];   // train arrivé au terminus (séjour de 60 s avant de disparaître)
 const GRIS = [160, 167, 173];   // repli d'un état inconnu seulement
@@ -750,12 +761,8 @@ function corpsTrain(t) {   // toute donnée PRIM passe par esc()
 
 function detail_train() {
   const membres = groupeOuvert && groupes.get(groupeOuvert);
-  if (membres) {
-    $("detail").innerHTML = "<b>" + membres.length + " trains proches</b>" + membres.map(c => trains.find(x => x.course === c)).filter(Boolean).map(ligneGroupe).join("");
-    return;
-  }
-  const t = trains.find(x => x.course === selection);
-  $("detail").innerHTML = t ? corpsTrain(t) : "Clique sur un train.";
+  $("fiche-groupe").hidden = !membres;   // un seul train : sa fiche est sur la carte (#fiche-train) ; ici seulement la liste d'une bulle de trains proches
+  if (membres) $("detail").innerHTML = "<b>" + membres.length + " trains proches</b>" + membres.map(c => trains.find(x => x.course === c)).filter(Boolean).map(ligneGroupe).join("");
 }
 
 // Fiche flottante sur la carte : infos du train choisi, mises à jour à chaque relevé ; bouton pour suivre ou arrêter de suivre.
@@ -884,6 +891,16 @@ function afficherChargement(e) {
   $("chargement-message").textContent = e.message;
   $("chargement-reessayer").hidden = !e.reessayer;
 }
+let accueilFerme = false, accueilVu = false;
+try { accueilVu = sessionStorage.getItem("accueil-vu") === "1"; } catch (e) { /* stockage de session indisponible : on présente à chaque chargement */ }
+function majAccueil() {
+  const e = etatAccueil({ vu: accueilVu, recu: premiereReponse, ferme: accueilFerme });
+  const a = $("accueil");
+  a.hidden = !e.afficher;
+  a.classList.toggle("compact", e.compact);
+  $("accueil-entrer").disabled = !e.bouton;
+  $("accueil-entrer").textContent = e.bouton ? "Voir les trains" : "Chargement…";
+}
 function majChargement() {
   if (chargementForce) { afficherChargement(chargementForce); return; }
   const erreur = statut && (statut.erreur || null);
@@ -895,6 +912,7 @@ function majChargement() {
     erreur, bloque: !!(statut && statut.bloque), reveil }) : null;
   p.hidden = !e;
   if (e) { p.dataset.type = e.type; p.textContent = e.message; }
+  majAccueil();
 }
 
 function reglerDirection(d) {
@@ -967,6 +985,10 @@ async function demarrer() {
   choix.value = gareChoisie;
   choix.addEventListener("change", () => { gareChoisie = choix.value; dernierePrevision = null; sequenceGare++; afficherProchains(); actualiserGare(); });
   creerDeck();
+  // ouverture : la caméra s'éloigne vers toute la ligne (sauf vue imposée par l'adresse ; sans animation si l'utilisateur la réduit)
+  if (!new URLSearchParams(location.search).get("vue")) {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) appliquerVue(boiteLigne()); else voler(boiteLigne(), 2600);
+  }
   chargerDecor();
   initialiserRecherche();
   $("vue-ligne").addEventListener("click", () => voler(boiteLigne(), 1400));
@@ -1000,7 +1022,15 @@ async function demarrer() {
   $("zoom-moins").addEventListener("click", () => voler({ ...vueCarte, zoom: vueCarte.zoom - 1 }, 300));
   $("incliner-carte").addEventListener("click", () => voler({ ...vueCarte, pitch: vueCarte.pitch > 20 ? 0 : 60 }, 500));   // 2D / 3D
   $("fiche-suivi").addEventListener("click", () => { if (suivi === selection) arreterSuivi(); else suivreTrain(selection); });
-  $("fiche-fermer").addEventListener("click", () => { selection = null; groupeOuvert = null; arreterSuivi(); detail_train(); afficherProchains(); afficher(); });
+  const fermerFiches = () => { selection = null; groupeOuvert = null; arreterSuivi(); detail_train(); majFiche(); afficherProchains(); afficher(); };
+  $("fiche-fermer").addEventListener("click", fermerFiches);
+  $("groupe-fermer").addEventListener("click", fermerFiches);
+  $("accueil-entrer").addEventListener("click", () => {
+    accueilFerme = true;
+    try { sessionStorage.setItem("accueil-vu", "1"); } catch (e) { /* tant pis : présentée à nouveau au prochain chargement */ }
+    majAccueil();
+  });
+  $("accueil-revoir").addEventListener("click", () => { accueilFerme = false; accueilVu = false; $("d-apropos").open = false; majAccueil(); });
   // vue de départ réglable par l'adresse : ?vue=longitude,latitude,zoom,inclinaison,cap (utile pour partager ou tester une vue)
   const v = new URLSearchParams(location.search).get("vue");
   if (v) {

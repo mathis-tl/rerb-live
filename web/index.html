@@ -7,68 +7,18 @@
 <link rel="stylesheet" href="carte.css">
 </head>
 <body>
-<aside id="panneau">
-  <h1>RER B, position estimée</h1>
-  <div id="bandeau-demo" class="bandeau" hidden><b>MODE DÉMONSTRATION.</b> Les trains sont inventés (aucune donnée PRIM). Vrai tracé et vraies gares.</div>
-  <div id="bandeau-erreur" class="bandeau erreur" hidden></div>
-
-  <h2>Statut</h2>
-  <div id="statut" class="note">Chargement…</div>
-
-  <h2>Affichage d'un train</h2>
-  <label class="choix"><input type="radio" name="mode" value="zone"><b>Incertitude seule</b></label>
-  <label class="choix"><input type="radio" name="mode" value="mixte" checked><b>Incertitude + train à l'échelle</b></label>
-  <label class="choix"><input type="radio" name="mode" value="train"><b>Train seul à l'échelle</b></label>
-  <div id="avertissement-train" class="note" hidden>Train seul : n'est honnête que si l'erreur passe sous ~100 m. Ce n'est pas le cas (voir J2 bis).</div>
-
-  <div class="note">Incertitude : trait le long de la voie, de la position du train 44 s plus tôt à 44 s plus tard (foncé), et 117 s (clair). Tracé approximatif dans les courbes (points espacés d'environ 8 s).
-    Valeurs de J2 bis (médiane et 90e centile de l'écart de départ, un seul jour, mesuré à quai) : <b>ordres de grandeur, pas une erreur mesurée en mètres</b>.
-    Bande symétrique : le biais de +53 s (estimation en avance) n'est pas appliqué.
-    Un trait plus court que prévu : certains instants ne sont pas calculables (gare retirée par PRIM, heures incohérentes, géométrie), ils sont omis, jamais inventés.</div>
-
-  <h2>Direction</h2>
-  <label class="choix"><input type="radio" name="direction" value="nord" checked><b>Vers le nord</b> (CDG, Mitry)</label>
-  <label class="choix"><input type="radio" name="direction" value="sud"><b>Vers le sud</b> (Massy, Saint-Rémy, Robinson)</label>
-  <div class="note">Une direction à la fois pour l'instant (bouton aussi sur la carte). Selon le cap du train (nord : de 270° à 90°). Un train dont le cap est inconnu reste affiché.</div>
-
-  <h2>Vues</h2>
-  <button id="vue-ligne">Toute la ligne</button><button id="vue-massy">Massy</button><button id="vue-quai">Quai de Massy</button>
-  <div id="commandes-vue">
-    <button id="tourner-gauche" title="Tourner à gauche de 30°">⟲</button>
-    <button id="boussole" title="Boussole : cliquer pour remettre le nord en haut" aria-label="Boussole"><span class="aiguille">▲</span></button>
-    <button id="tourner-droite" title="Tourner à droite de 30°">⟳</button>
-    <button id="incliner-moins" title="Voir de plus haut (jusqu'à 0°, de dessus)">⤓ de haut</button>
-    <button id="incliner-plus" title="Incliner la vue (jusqu'à 85°, presque à l'horizontale)">⤒ de côté</button>
-  </div>
-  <div class="note">À la souris : glisser = déplacer, molette = zoom, clic droit ou Ctrl + glisser = tourner et incliner (ou glisser la boussole sur la carte) ; flèches au clavier ; deux doigts sur écran tactile. « / » = chercher une gare.</div>
-
-  <h2>Trains</h2>
-  <div id="compteurs" class="note"></div>
-  <div id="liste-speciaux"></div>
-
-  <h2>Prochains trains à une gare</h2>
-  <select id="choix-gare" aria-label="Gare"></select>
-  <div id="etat-gare" class="note"></div>
-  <table id="prochains"><tbody></tbody></table>
-
-  <h2>Train choisi</h2>
-  <div id="detail" class="note">Clique sur un train.</div>
-</aside>
-
 <main id="carte">
-  <div id="chargement" role="status" aria-live="polite" data-type="attente">
-    <div class="roue" aria-hidden="true"></div>
-    <p id="chargement-message">Chargement des trains du RER B…</p>
-    <p class="note">Positions estimées à partir des horaires PRIM, pas un GPS.</p>
-    <button id="chargement-reessayer" type="button" hidden>Réessayer</button>
+  <div id="barre-haut">
+    <div id="recherche-boite">
+      <input id="recherche" type="search" placeholder="Chercher une gare…  ( / )" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="suggestions" aria-label="Chercher une gare">
+      <ul id="suggestions" role="listbox" hidden></ul>
+    </div>
+    <div id="direction-boite"><span id="direction-texte"></span><button id="direction-changer" type="button"></button></div>
   </div>
-  <div id="reperes-vue" aria-hidden="true"></div>
-  <div id="etat-donnees" role="status" aria-live="polite" hidden></div>
-  <div id="recherche-boite">
-    <input id="recherche" type="search" placeholder="Chercher une gare…  ( / )" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="suggestions" aria-label="Chercher une gare">
-    <ul id="suggestions" role="listbox" hidden></ul>
+  <div id="bandeaux">
+    <div id="bandeau-demo" class="bandeau" hidden><b>MODE DÉMONSTRATION.</b> Les trains sont inventés (aucune donnée PRIM). Vrai tracé et vraies gares.</div>
+    <div id="bandeau-erreur" class="bandeau erreur" hidden></div>
   </div>
-  <div id="direction-boite"><span id="direction-texte"></span><button id="direction-changer" type="button"></button></div>
   <div id="commandes-carte">
     <button id="zoom-plus" type="button" title="Zoom avant" aria-label="Zoom avant">+</button>
     <button id="zoom-moins" type="button" title="Zoom arrière" aria-label="Zoom arrière">−</button>
@@ -80,21 +30,90 @@
     <div id="fiche-corps" class="note"></div>
     <button id="fiche-suivi" type="button">Suivre ce train</button><button id="fiche-fermer" type="button" aria-label="Fermer">✕</button>
   </div>
+  <div id="fiche-groupe" hidden>
+    <h3>Trains proches</h3>
+    <div id="detail" class="note"></div>
+    <button id="groupe-fermer" type="button" aria-label="Fermer">✕</button>
+  </div>
+  <div id="etat-donnees" role="status" aria-live="polite" hidden></div>
+  <div id="reperes-vue" aria-hidden="true"></div>
+
+  <div id="dock">
+    <details id="d-prochains">
+      <summary>Prochains trains</summary>
+      <div class="corps">
+        <select id="choix-gare" aria-label="Gare"></select>
+        <div id="etat-gare" class="note"></div>
+        <table id="prochains"><tbody></tbody></table>
+      </div>
+    </details>
+    <details id="d-legende">
+      <summary>Légende</summary>
+      <div class="corps" id="legende">
+        <b>Position estimée, pas GPS</b>
+        <span id="source-decor" class="note" hidden></span>
+        <span class="note">de loin (zoom &lt; 15) : icône du train agrandie (pas à l'échelle) ; de près : modèle détaillé de la Z 8100 ; bulle « n » = n trains proches, cliquer pour la liste</span>
+        <span class="pastille" style="background:#2f855a"></span>à quai
+        <span class="pastille" style="background:#2b6cb0"></span>en route
+        <span class="note">contour autour de la rame (plusieurs états : contours emboîtés) :</span>
+        <span class="pastille contour" style="border-color:#ff3c4b"></span>au terminus (60 s avant de disparaître ; le trait pulse)
+        <span class="pastille contour" style="border-color:#facc15"></span>train retenu en pleine voie (PRIM a repoussé son arrivée de plus de 2 min : il attend avant la gare ; le trait pulse)
+        <span class="pastille contour" style="border-color:#a855f7"></span>train sélectionné
+        <span class="pastille contour" style="border-color:#ec4899"></span>données anciennes (pas de nouvelle information de PRIM depuis 15 min ; position extrapolée de la dernière estimation)
+        <span class="note">« horaire théorique » : l'heure affichée est celle de l'horaire, PRIM n'annonce aucun écart : soit le train est à l'heure, soit PRIM ne suit pas ce train en temps réel (indicatif, sans couleur)</span>
+        <span class="pastille zone"></span>trait = erreur supposée le long de la voie
+        <span id="legende-hauteurs" class="note"><span class="pastille carre bat-mesure"></span>hauteur connue (OSM ou IGN BD TOPO : hauteur, ou étages × 3 m)
+          <span class="pastille carre bat-defaut"></span>hauteur par défaut (9 m), non connue</span>
+      </div>
+    </details>
+    <details id="d-options">
+      <summary>Options et état</summary>
+      <div class="corps">
+        <h2>Statut</h2>
+        <div id="statut" class="note">Chargement…</div>
+        <div id="compteurs" class="note"></div>
+        <div id="liste-speciaux"></div>
+        <h2>Affichage d'un train</h2>
+        <label class="choix"><input type="radio" name="mode" value="zone"><b>Incertitude seule</b></label>
+        <label class="choix"><input type="radio" name="mode" value="mixte" checked><b>Incertitude + train à l'échelle</b></label>
+        <label class="choix"><input type="radio" name="mode" value="train"><b>Train seul à l'échelle</b></label>
+        <div id="avertissement-train" class="note" hidden>Train seul : n'est honnête que si l'erreur passe sous ~100 m. Ce n'est pas le cas.</div>
+        <h2>Caméra</h2>
+        <div id="commandes-vue">
+          <button id="vue-ligne" type="button">Toute la ligne</button>
+          <button id="tourner-gauche" type="button" title="Tourner à gauche de 30°">⟲</button>
+          <button id="boussole" type="button" title="Boussole : cliquer pour remettre le nord en haut" aria-label="Boussole"><span class="aiguille">▲</span></button>
+          <button id="tourner-droite" type="button" title="Tourner à droite de 30°">⟳</button>
+          <button id="incliner-moins" type="button" title="Voir de plus haut (jusqu'à 0°, de dessus)">⤓ de haut</button>
+          <button id="incliner-plus" type="button" title="Incliner la vue (jusqu'à 85°, presque à l'horizontale)">⤒ de côté</button>
+        </div>
+      </div>
+    </details>
+    <details id="d-apropos">
+      <summary>À propos et précision</summary>
+      <div class="corps">
+        <p class="note">Les positions sont <b>estimées</b> à partir des horaires annoncés par PRIM (Île-de-France Mobilités), pas lues sur un GPS. Mesuré à Palaiseau le 18/11 (un jour, une gare) : arrivée estimée à ±46 s en moyenne, départ à ±43 s. En pleine voie, aucune mesure de référence n'existe.</p>
+        <p class="note">Le trait le long de la voie montre l'incertitude : foncé ≈ ±44 s, clair ≈ ±117 s. Un trait plus court que prévu signale un instant non calculable (gare retirée par PRIM, heures incohérentes) : il est omis, jamais inventé.</p>
+        <p class="note">Souris : glisser = déplacer, molette = zoom, clic droit ou Ctrl + glisser = tourner et incliner (ou glisser la boussole) ; flèches au clavier ; deux doigts sur écran tactile ; « / » = chercher une gare.</p>
+        <button id="accueil-revoir" type="button">Revoir la présentation</button>
+      </div>
+    </details>
+  </div>
+
+  <div id="accueil" role="dialog" aria-labelledby="accueil-titre">
+    <div class="carte-accueil">
+      <h1 id="accueil-titre">RER B en direct</h1>
+      <p class="phrase">Où sont les trains du RER B ? Position estimée à partir des horaires PRIM, mise à jour toutes les 2 minutes — pas un GPS.</p>
+      <div id="chargement" role="status" aria-live="polite" data-type="attente">
+        <div class="roue" aria-hidden="true"></div>
+        <p id="chargement-message">Chargement des trains du RER B…</p>
+        <button id="chargement-reessayer" type="button" hidden>Réessayer</button>
+      </div>
+      <button id="accueil-entrer" type="button" class="principal" disabled>Voir les trains</button>
+      <p class="aide">Glisser : déplacer · clic droit + glisser : tourner · molette : zoom</p>
+    </div>
+  </div>
 </main>
-<div id="legende"><b>Position estimée, pas GPS</b>
-  <span id="source-decor" class="note" hidden></span>
-  <span class="note">de loin (zoom < 15) : icône du train agrandie (pas à l'échelle) ; de près : modèle détaillé de la Z 8100 ; bulle « n » = n trains proches, cliquer pour la liste</span>
-  <span class="pastille" style="background:#2f855a"></span>à quai
-  <span class="pastille" style="background:#2b6cb0"></span>en route
-  <span class="note">contour autour de la rame (plusieurs états : contours emboîtés) :</span>
-  <span class="pastille contour" style="border-color:#ff3c4b"></span>au terminus (60 s avant de disparaître ; le trait pulse)
-  <span class="pastille contour" style="border-color:#facc15"></span>train retenu en pleine voie (PRIM a repoussé son arrivée de plus de 2 min : il attend avant la gare ; le trait pulse)
-  <span class="pastille contour" style="border-color:#a855f7"></span>train sélectionné
-  <span class="pastille contour" style="border-color:#ec4899"></span>données anciennes (pas de nouvelle information de PRIM depuis 15 min ; position extrapolée de la dernière estimation)
-  <span class="note">« horaire théorique » : l'heure affichée est celle de l'horaire, PRIM n'annonce aucun écart : soit le train est à l'heure, soit PRIM ne suit pas ce train en temps réel (indicatif, sans couleur)</span>
-  <span class="pastille zone"></span>trait = erreur supposée le long de la voie
-  <span id="legende-hauteurs" class="note"><span class="pastille carre bat-mesure"></span>hauteur connue (OSM ou IGN BD TOPO : hauteur, ou étages × 3 m)
-    <span class="pastille carre bat-defaut"></span>hauteur par défaut (9 m), non connue</span></div>
 
 <script src="vendor/deck.gl-9.4.1.min.js"></script>
 <script src="modele-z8100.js"></script>
