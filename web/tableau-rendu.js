@@ -5,6 +5,7 @@
 // --- couleurs d'état (copie de web/carte.js ; un test vérifie qu'elles restent identiques)
 const COULEURS = { "à quai": [47, 133, 90], "en route": [43, 108, 176] };
 const GRIS = [160, 167, 173];
+const ROSE_ANCIENNES = [236, 72, 153];   // comme web/carte.js
 const ROUGE_TERMINUS = [226, 34, 48];
 const AMBRE = [245, 158, 11];     // anneau du train sélectionné (existe déjà)
 const JAUNE = [250, 204, 21];     // proposé pour « retenu »
@@ -30,7 +31,7 @@ const LIGNES = [
   { cle: "cumul-1", court: "Terminus + sélectionné", etat: "à quai", terminus: true, selection: true, statut: "proposé",
     note: "Deux états à la fois : un contour par état, emboîtés. Le plus important (terminus) est au plus près de la rame, la sélection autour." },
   { cle: "cumul-2", court: "Retenu B + données anciennes", etat: "en route", retenu: "B", anciennes: true, statut: "proposé",
-    note: "Autre cumul : contour jaune qui pulse lentement, entouré du contour gris des données anciennes." },
+    note: "Autre cumul : contour jaune qui pulse lentement, entouré du contour rose des données anciennes." },
 ];
 const SANS_POSITION = [
   ["Non placé", "heures PRIM inutilisables (course annulée, horaires incohérents) : aucun train dessiné ; listé à part dans le panneau « sans position » de la carte, jamais masqué."],
@@ -55,7 +56,7 @@ function echelleTrain(zoom, ancien = false, force = null) {   // force : "icone"
 }
 const MODELES = { motrice: ModeleZ8100.construire({ voiture: 0 }), remorque: ModeleZ8100.construire({ voiture: 1 }), icone: ModeleZ8100.construire({ icone: true }) };
 // Proposé : l'icône (zoom < 15) reprend la palette du modèle détaillé (bandeau de vitres bleu-violet au lieu du bleu clair, bas de caisse sombre du modèle détaillé).
-const PALETTE_ALIGNEE = { bleu: [84, 100, 146], noir: [52, 56, 62] };
+const PALETTE_ALIGNEE = { bleu: [84, 100, 146], noir: [52, 56, 62], blanc: [208, 214, 222] };
 const CENTRES_VOITURES_M = [39.0125, 13, -13, -39.0125];
 
 // --- vues
@@ -67,7 +68,7 @@ const VUES = {   // zoom0 : zoom de départ ET de disposition des trains (fixe) 
 };
 const reglages = () => ({ contour: document.getElementById("contour").checked, socle: document.getElementById("socle").checked, palette: document.getElementById("palette").checked, incline: document.getElementById("incline").checked, pulse: document.getElementById("pulse").checked });
 
-const couleurEtat = l => (l.anciennes ? GRIS : l.terminus ? ROUGE_TERMINUS : l.retenu === "A" ? JAUNE : COULEURS[l.etat]);
+const couleurEtat = l => (l.anciennes ? ROSE_ANCIENNES : l.terminus ? ROUGE_TERMINUS : l.retenu === "A" ? JAUNE : COULEURS[l.etat]);
 
 function lignesPlacees(vue) {   // grille de 2 colonnes pour les deux échelles (près : les halos de 110 m ne se chevauchent pas ; loin : les icônes de 40 px non plus)
   const liste = vue.cles ? LIGNES.filter(l => vue.cles.includes(l.cle)) : LIGNES;
@@ -148,7 +149,7 @@ function calques(vue, maintenant) {
 const ROUGE_VIF = [255, 60, 75];
 const PRIORITE = [   // du plus important (au plus près de la rame) au moins important
   { champ: "terminus", couleur: ROUGE_VIF, pulse: "rapide" }, { champ: "retenu", couleur: JAUNE, pulse: "lent" },
-  { champ: "selection", couleur: AMBRE }, { champ: "anciennes", couleur: GRIS },
+  { champ: "selection", couleur: AMBRE }, { champ: "anciennes", couleur: ROSE_ANCIENNES },
 ];
 const contoursDe = d => PRIORITE.filter(c => d[c.champ]).map(c => (c.champ === "retenu" && d.retenu === "A" ? { ...c, pulse: undefined } : c));
 const PX_TRAIT = 2.4, PX_ECART = 3.5, PX_PULSE = 1.6;   // épaisseur du trait, écart rame -> 1er trait (et entre traits), amplitude du pulse (épaisseur)

@@ -13,7 +13,8 @@ window.fetch = (url, options) => {
 const INTERVALLE_MS = 3000;            // le serveur n'appelle PRIM qu'au plus toutes les 120 s : interroger plus souvent ne coûte rien
 const COULEURS = { "à quai": [47, 133, 90], "en route": [43, 108, 176] };
 const ROUGE_TERMINUS = [226, 34, 48];   // train arrivé au terminus (séjour de 60 s avant de disparaître)
-const GRIS = [160, 167, 173];
+const GRIS = [160, 167, 173];   // repli d'un état inconnu seulement
+const ROSE_ANCIENNES = [236, 72, 153];   // données anciennes : le gris se voyait trop peu (21/11)
 const JAUNE_RETENU = [250, 204, 21];   // train retenu en pleine voie (PRIM a repoussé son arrivée de plus de 120 s)
 const COULEUR_SELECTION = [168, 85, 247];   // contour du train sélectionné (violet : l'ambre de l'ancien anneau se confondait avec le jaune prévu pour « retenu »)
 const MASSY = { longitude: 2.2588, latitude: 48.7255 };
@@ -33,7 +34,7 @@ const MODELES = { motrice: ModeleZ8100.construire({ voiture: 0 }), remorque: Mod
 const ZOOM_DETAIL = 15, ZOOM_PLEIN = 16, CIBLE_RAME_PX = 40, CIBLE_LARGEUR_PX = 10;
 const LONGUEUR_RAME_M = 104.05, LARGEUR_ICONE_M = 4.2, LARGEUR_CAISSE_M = 2.798;
 // Palette de l'icône alignée sur le modèle détaillé (bandeau de vitres bleu-violet, bas de caisse sombre) pour que le passage au zoom 15 se voie peu.
-const PALETTE_ICONE = { bleu: [84, 100, 146], noir: [52, 56, 62] };
+const PALETTE_ICONE = { bleu: [84, 100, 146], noir: [52, 56, 62], blanc: [208, 214, 222] };
 function echelleTrain(zoom) {
   const metresParPixel = 78271.517 * Math.cos(48.8 * Math.PI / 180) / Math.pow(2, zoom);
   const borne = (v, max) => Math.min(max, Math.max(1, v));
@@ -96,10 +97,10 @@ function suggestionsGares(gares, saisie, max = 8) {
 // --- fin recherche de gare
 
 // --- Couleur et orientation
-const couleurTrain = t => (t.donnees_anciennes ? GRIS : t.terminus ? ROUGE_TERMINUS : t.retenu ? JAUNE_RETENU : (COULEURS[t.etat] || GRIS));
+const couleurTrain = t => (t.donnees_anciennes ? ROSE_ANCIENNES : t.terminus ? ROUGE_TERMINUS : t.retenu ? JAUNE_RETENU : (COULEURS[t.etat] || GRIS));
 // --- etiquettes
 // Deux faits distincts, jamais confondus (l'ancien mot, trompeur, a été remplacé le 18/11) :
-//  • « Données anciennes » : PRIM n'a pas mis à jour ce train depuis plus de 15 min (certain) ; position extrapolée de la dernière estimation ; couleur grise ;
+//  • « Données anciennes » : PRIM n'a pas mis à jour ce train depuis plus de 15 min (certain) ; position extrapolée de la dernière estimation ; couleur rose (le gris se voyait trop peu, 21/11) ;
 //  • « Horaire théorique » : l'heure affichée est celle de l'horaire, PRIM n'annonce aucun écart (indicatif : un train à l'heure donne le même résultat) ; aucune couleur d'alerte.
 const NOTE_DONNEES_ANCIENNES = "pas de nouvelle information de PRIM sur ce train depuis plus de 15 min ; sa position est extrapolée à partir de la dernière estimation connue.";
 const NOTE_RETENU = "PRIM a repoussé l'arrivée de ce train à la prochaine gare de plus de 2 min : il attend en pleine voie, juste avant la gare, puis repart pour arriver à la nouvelle heure.";
@@ -383,7 +384,7 @@ const contoursDeTrain = (t, selectionne) => [
   t.terminus && { couleur: ROUGE_TERMINUS_VIF, pulse: true },
   t.retenu && { couleur: JAUNE_RETENU, pulse: true },
   selectionne && { couleur: COULEUR_SELECTION, pulse: false },
-  t.donnees_anciennes && { couleur: GRIS, pulse: false },
+  t.donnees_anciennes && { couleur: ROSE_ANCIENNES, pulse: false },
 ].filter(Boolean);
 
 // Contour fermé en mètres [x, y] autour de l'axe (queue -> tête) à la distance r : deux côtés parallèles et deux demi-cercles aux bouts.

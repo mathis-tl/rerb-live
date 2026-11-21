@@ -320,7 +320,7 @@ class TestCodeCarte(unittest.TestCase):
         if not shutil.which("node"):
             self.skipTest("node absent")
         bloc = lambda a, b: self.js.split(a)[1].split(b)[0]
-        constantes = " ".join(re.search(rf"const {n} = \[[^\]]*\];", self.js).group(0) for n in ("GRIS", "JAUNE_RETENU", "COULEUR_SELECTION"))
+        constantes = " ".join(re.search(rf"const {n} = \[[^\]]*\];", self.js).group(0) for n in ("ROSE_ANCIENNES", "JAUNE_RETENU", "COULEUR_SELECTION"))
         code = (constantes + bloc("// --- échelle du train", "// --- fin échelle du train") + bloc("// --- voitures", "// --- fin voitures")
                 + bloc("// --- contour", "// --- fin contour") + f"; console.log(JSON.stringify({expression}))")
         return json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, timeout=30, check=True).stdout)
@@ -330,13 +330,13 @@ class TestCodeCarte(unittest.TestCase):
         self.assertEqual(c({}, False), [], "en route, à quai, horaire théorique : pas de contour")
         self.assertEqual(c({"horaire_theorique": True}, False), [])
         self.assertEqual(c({"terminus": True}, False), [[255, 60, 75]])
-        self.assertEqual(c({"donnees_anciennes": True}, False), [[160, 167, 173]])
+        self.assertEqual(c({"donnees_anciennes": True}, False), [[236, 72, 153]])
         self.assertEqual(c({"retenu": True}, False), [[250, 204, 21]], "retenu en pleine voie : jaune, différent du violet de la sélection")
         self.assertEqual(c({"terminus": True, "retenu": True, "donnees_anciennes": True}, True),
-                         [[255, 60, 75], [250, 204, 21], [168, 85, 247], [160, 167, 173]], "priorité : terminus > retenu > sélection > données anciennes")
+                         [[255, 60, 75], [250, 204, 21], [168, 85, 247], [236, 72, 153]], "priorité : terminus > retenu > sélection > données anciennes")
         self.assertEqual(c({}, True), [[168, 85, 247]], "la sélection est violette (ni ambre ni jaune)")
         # cumul : le plus important au plus près de la rame
-        self.assertEqual(c({"terminus": True, "donnees_anciennes": True}, True), [[255, 60, 75], [168, 85, 247], [160, 167, 173]])
+        self.assertEqual(c({"terminus": True, "donnees_anciennes": True}, True), [[255, 60, 75], [168, 85, 247], [236, 72, 153]])
         self.assertTrue(self._contour('contoursDeTrain({terminus: true}, false)[0].pulse'))
         self.assertFalse(self._contour('contoursDeTrain({}, true)[0].pulse'))
 
@@ -378,7 +378,7 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("PathLayer", self.js)
 
     def test_palette_de_l_icone_alignee_sur_le_detaille(self):
-        self.assertIn("PALETTE_ICONE = { bleu: [84, 100, 146], noir: [52, 56, 62] }", self.js)
+        self.assertIn("PALETTE_ICONE = { bleu: [84, 100, 146], noir: [52, 56, 62], blanc: [208, 214, 222] }", self.js)
         self.assertIn("PALETTE_ICONE[piece.nom] || piece.couleur", self.js)
 
     # --- rame articulée : chaque caisse sur la voie
@@ -546,9 +546,9 @@ class TestCodeCarte(unittest.TestCase):
         deux = self._etiquettes({"donnees_anciennes": True, "horaire_theorique": True})
         self.assertEqual([x["libelle"] for x in deux], ["Données anciennes", "Horaire théorique"])
 
-    def test_couleur_grise_seulement_pour_des_donnees_anciennes(self):
+    def test_couleur_rose_seulement_pour_des_donnees_anciennes(self):
         c = lambda t: self._node("// --- Couleur et orientation", "// --- etiquettes",
-                                 f"(globalThis.GRIS = 'gris', globalThis.ROUGE_TERMINUS = 'rouge', globalThis.COULEURS = {{'en route': 'bleu'}}, couleurTrain({json.dumps(t)}))")
+                                 f"(globalThis.ROSE_ANCIENNES = 'rose', globalThis.GRIS = 'gris', globalThis.ROUGE_TERMINUS = 'rouge', globalThis.COULEURS = {{'en route': 'bleu'}}, couleurTrain({json.dumps(t)}))")
         gris = c({"donnees_anciennes": True, "etat": "en route"})
         self.assertEqual(c({"horaire_theorique": True, "etat": "en route"}), c({"etat": "en route"}), "horaire théorique : pas de couleur d'alerte")
         self.assertNotEqual(gris, c({"etat": "en route"}))
@@ -608,7 +608,7 @@ class TestTableauRendu(unittest.TestCase):
 
     def test_les_couleurs_d_etat_sont_celles_de_la_carte(self):
         carte = (WEB / "carte.js").read_text(encoding="utf-8")
-        for nom in ("COULEURS", "GRIS", "ROUGE_TERMINUS"):
+        for nom in ("COULEURS", "GRIS", "ROSE_ANCIENNES", "ROUGE_TERMINUS"):
             valeur = re.search(rf"const {nom} = (\{{[^}}]*\}}|\[[^\]]*\]);", carte).group(1)
             self.assertIn(valeur, self.js, nom)
 

@@ -5,6 +5,8 @@ const ANGLES = [
   { titre: "zoom 18,7 (taille réelle), incliné 20°, vu de côté (motrice de tête à droite)", zoom: 18.7, pitch: 20, bearing: 0 },
   { titre: "zoom 14,5 (agrandi à ~10 px de large), incliné 55°", zoom: 14.5, pitch: 55, bearing: 20 },
   { titre: "zoom 14,5 (agrandi), de dessus", zoom: 14.5, pitch: 0, bearing: 0 },
+  { titre: "zoom 12,5 (très dézoomé), incliné 55°", zoom: 12.5, pitch: 55, bearing: 20 },
+  { titre: "zoom 10,5 (le plus dézoomé), incliné 55°", zoom: 10.5, pitch: 55, bearing: 20 },
 ];
 const decksM = [];
 function themeM() { return document.querySelector('input[name="theme"]:checked').value; }
