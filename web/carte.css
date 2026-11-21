@@ -99,13 +99,16 @@ select { font: inherit; width: 100%; padding: 7px 8px; margin-bottom: 6px; backg
 #dock { position: absolute; left: 12px; bottom: 12px; z-index: 5; width: 340px; max-width: calc(100% - 24px); max-height: calc(100% - 90px); overflow: auto;
   background: var(--surface); border: var(--cadre); border-top: var(--cadre-haut); border-radius: var(--rayon); }
 #dock details + details { border-top: 1px solid var(--filet); }
-#dock summary { cursor: pointer; padding: 11px 14px; font: var(--titre-poids) var(--t1)/1.2 var(--f-titre); text-transform: var(--titre-casse); letter-spacing: var(--titre-ls); list-style: none; display: flex; justify-content: space-between; align-items: center; }
-#dock summary::-webkit-details-marker { display: none; }
-#dock summary::after { content: ""; width: 7px; height: 7px; margin: -3px 2px 0 0; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg); }
-#dock details[open] > summary { background: var(--entete-fond); color: var(--entete-texte); }
-#dock details[open] > summary::after { transform: rotate(-135deg); margin-top: 3px; }
-#dock summary:hover { background: var(--survol); color: var(--encre); }
-#dock .corps { padding: 12px 14px 16px; max-height: 46vh; overflow: auto; }
+/* --- bas droite : Prochains trains, panneau indépendant (réduit à son onglet, s'ouvre quand une gare est choisie) */
+#panneau-prochains { position: absolute; right: 12px; bottom: 12px; z-index: 5; width: 340px; max-width: calc(100% - 24px); max-height: calc(100% - 210px); overflow: auto;
+  background: var(--surface); border: var(--cadre); border-top: var(--cadre-haut); border-radius: var(--rayon); }
+#dock summary, #panneau-prochains summary { cursor: pointer; padding: 11px 14px; font: var(--titre-poids) var(--t1)/1.2 var(--f-titre); text-transform: var(--titre-casse); letter-spacing: var(--titre-ls); list-style: none; display: flex; justify-content: space-between; align-items: center; }
+#dock summary::-webkit-details-marker, #panneau-prochains summary::-webkit-details-marker { display: none; }
+#dock summary::after, #panneau-prochains summary::after { content: ""; width: 7px; height: 7px; margin: -3px 2px 0 0; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg); }
+#dock details[open] > summary, #panneau-prochains details[open] > summary { background: var(--entete-fond); color: var(--entete-texte); }
+#dock details[open] > summary::after, #panneau-prochains details[open] > summary::after { transform: rotate(-135deg); margin-top: 3px; }
+#dock summary:hover, #panneau-prochains summary:hover { background: var(--survol); color: var(--encre); }
+#dock .corps, #panneau-prochains .corps { padding: 12px 14px 16px; max-height: 46vh; overflow: auto; }
 
 /* --- légende : une entrée par bloc, terme en gras puis explication courte en début de ligne, espace entre les entrées */
 .legende-titre { margin: 0 0 4px; }
@@ -170,9 +173,9 @@ label.choix input { margin: 0; accent-color: var(--accent); }
 @media (prefers-reduced-motion: reduce) { .roue::after { animation: none; width: 100%; opacity: .5; } }
 
 /* --- vitrine : pendant la présentation, la carte est seule avec le train suivi ; l'interface revient quand la fiche part */
-#barre-haut, #commandes-carte, #dock { transition: opacity .4s; }
-#carte.vitrine #barre-haut, #carte.vitrine #commandes-carte, #carte.vitrine #dock { opacity: 0; pointer-events: none; }
-@media (prefers-reduced-motion: reduce) { #barre-haut, #commandes-carte, #dock { transition: none; } }
+#barre-haut, #commandes-carte, #dock, #panneau-prochains { transition: opacity .4s; }
+#carte.vitrine #barre-haut, #carte.vitrine #commandes-carte, #carte.vitrine #dock, #carte.vitrine #panneau-prochains { opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { #barre-haut, #commandes-carte, #dock, #panneau-prochains { transition: none; } }
 
 /* --- petits écrans (version mobile à venir : ici seulement de quoi ne pas déborder) */
 @media (max-width: 760px) {
@@ -180,5 +183,6 @@ label.choix input { margin: 0; accent-color: var(--accent); }
   #recherche-boite { width: 100%; }
   #bandeaux { top: 112px; width: calc(100% - 100px); left: 12px; transform: none; }
   #bulle { width: min(300px, calc(100% - 24px)); }
+  #panneau-prochains { left: 12px; right: 12px; width: auto; bottom: 64px; }   /* mobile à venir : l'onglet passe au-dessus du dock */
   .carte-accueil { left: 16px; }
 }

@@ -785,7 +785,9 @@ function suivreTrain(course) {
   majFiche(); afficherProchains(); afficher();
 }
 const ZOOM_SUIVI = 18, ZOOM_GARE = 17.2;
+function ouvrirProchains() { $("d-prochains").open = true; }   // panneau en bas à droite : réduit à son onglet, ouvert dès qu'une gare est choisie
 function allerGare(g) {
+  ouvrirProchains();
   suivi = null; selection = null;
   gareChoisie = g.ref; dernierePrevision = null; sequenceGare++;
   const choix = $("choix-gare"); if (choix) choix.value = g.ref;
@@ -926,7 +928,7 @@ function placerBulle() {
   if (!t || !vp) { trait.toggleAttribute("hidden", true); return; }
   const [px, py] = vp.project([t.lon, t.lat, 3]);
   const zc = $("carte").getBoundingClientRect();
-  const zones = ["barre-haut", "commandes-carte", "dock", "etat-donnees", "bandeaux"].map($).filter(e => e && e.getClientRects().length).map(e => {
+  const zones = ["barre-haut", "commandes-carte", "dock", "panneau-prochains", "etat-donnees", "bandeaux"].map($).filter(e => e && e.getClientRects().length).map(e => {
     const r = e.getBoundingClientRect(); return { x0: r.left - zc.left, y0: r.top - zc.top, x1: r.right - zc.left, y1: r.bottom - zc.top };
   });
   const p = placementBulle({ x: px, y: py }, { l: b.offsetWidth, h: b.offsetHeight }, { l: zc.width, h: zc.height }, zones, coinBulle);

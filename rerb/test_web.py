@@ -259,6 +259,41 @@ class TestCodeCarte(unittest.TestCase):
         self.assertNotIn('id="fiche-train"', html, "plus de fiche en coin : la bulle est reliée au train")
         self.assertNotIn('id="fiche-groupe"', html)
 
+    # --- Prochains trains : panneau indépendant en bas à droite, réduit à un onglet, ouvert quand une gare est choisie (21/11)
+    def test_prochains_trains_hors_du_dock_en_bas_a_droite(self):
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        self.assertIn('<div id="panneau-prochains">', html)
+        self.assertGreater(html.index('id="d-prochains"'), html.index('id="panneau-prochains"'), "dans son propre panneau")
+        self.assertGreater(html.index('id="panneau-prochains"'), html.index('id="d-apropos"'), "après le dock : plus dans la même boîte que la légende")
+        self.assertLess(html.index('id="panneau-prochains"'), html.index('id="accueil"'))
+        dock = html.split('<div id="dock">')[1].split('<div id="panneau-prochains">')[0]
+        for ident in ("d-legende", "d-options", "d-apropos"):
+            self.assertIn(f'id="{ident}"', dock)
+        self.assertNotIn('id="d-prochains"', dock)
+        css = self._css()
+        regle = re.search(r"#panneau-prochains\s*\{([^}]*)\}", css).group(1)
+        self.assertIn("position: absolute", regle)
+        self.assertIn("right: 12px", regle)
+        self.assertIn("bottom: 12px", regle)
+
+    def test_panneau_prochains_masque_pendant_la_vitrine_et_borne_en_hauteur(self):
+        css = self._css()
+        self.assertRegex(css, r"#carte\.vitrine #panneau-prochains")
+        regle = re.search(r"#panneau-prochains\s*\{([^}]*)\}", css).group(1)
+        self.assertRegex(regle, r"max-height:\s*calc\(100% - \d+px\)", "ne recouvre pas les commandes de la carte en haut à droite")
+
+    def test_choisir_une_gare_ouvre_le_panneau(self):
+        corps = self.js.split("function allerGare(")[1].split("\n}\n")[0]
+        self.assertIn("ouvrirProchains()", corps)
+        ouvrir = self.js.split("function ouvrirProchains(")[1].split("\n}\n")[0]
+        self.assertIn('$("d-prochains").open = true', ouvrir)
+        self.assertIn("allerGare(g)", self.js.split("const choisir = g =>")[1].split("\n")[0], "valider un nom dans la barre du haut")
+        self.assertIn("allerGare(object)", self.js, "clic sur une gare de la carte")
+
+    def test_la_bulle_evite_le_panneau_prochains(self):
+        zones = self.js.split("function placerBulle(")[1].split("\n}\n")[0]
+        self.assertIn('"panneau-prochains"', zones)
+
     def test_tous_les_identifiants_utilises_par_le_js_existent_dans_la_page(self):
         html = (WEB / "index.html").read_text(encoding="utf-8")
         presents = set(re.findall(r'id="([^"]+)"', html))

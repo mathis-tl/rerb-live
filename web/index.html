@@ -34,14 +34,6 @@
   <div id="etat-donnees" role="status" aria-live="polite" hidden></div>
 
   <div id="dock">
-    <details id="d-prochains">
-      <summary>Prochains trains</summary>
-      <div class="corps">
-        <select id="choix-gare" aria-label="Gare"></select>
-        <div id="etat-gare" class="note"></div>
-        <table id="prochains"><tbody></tbody></table>
-      </div>
-    </details>
     <details id="d-legende">
       <summary>Légende</summary>
       <div class="corps" id="legende">
@@ -105,6 +97,17 @@
         <button id="accueil-revoir" type="button">Revoir la présentation</button>
       </div>
     </details>
+  </div>
+
+  <div id="panneau-prochains">
+  <details id="d-prochains">
+    <summary>Prochains trains</summary>
+    <div class="corps">
+      <select id="choix-gare" aria-label="Gare"></select>
+      <div id="etat-gare" class="note"></div>
+      <table id="prochains"><tbody></tbody></table>
+    </div>
+  </details>
   </div>
 
   <div id="accueil" role="dialog" aria-labelledby="accueil-titre">
