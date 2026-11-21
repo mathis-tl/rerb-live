@@ -362,7 +362,7 @@
   const PROFIL_ICONE = (() => {
     const p = [{ z: 0.3, y: 1.2, c: "noir" }, { z: 0.95, y: 1.38, c: "noir" }, { z: 1.0, y: 1.4, c: "blanc" }, { z: 1.9, y: 1.4, c: "blanc" },
       { z: 2.0, y: 1.4, c: "bleu" }, { z: 3.0, y: 1.4, c: "bleu" }, { z: 3.1, y: 1.38, c: "blanc" }, { z: 3.4, y: 1.36, c: "blanc" }];
-    for (let k = 1; k <= 8; k++) { const a = (k / 8) * Math.PI / 2; p.push({ z: 3.4 + (Z.toit - 3.4) * Math.sin(a), y: 0.3 + (1.36 - 0.3) * Math.cos(a), c: k > 5 ? "toit" : "blanc" }); }
+    for (let k = 1; k <= 8; k++) { const a = (k / 8) * Math.PI / 2; p.push({ z: 3.4 + (Z.toit - 3.4) * Math.sin(a), y: 0.3 + (1.36 - 0.3) * Math.cos(a), c: "toit" }); }   // toit gris dès l'arrondi, comme le détaillé (le dessus de la rame est gris, pas blanc)
     return p;
   })();
   function caisseIcone(M, motrice, L) {
@@ -377,7 +377,7 @@
     M.noir.boite(L - 0.3, L, -1.0, 1.0, 1.1, 3.0);
     for (const cote of [1, -1]) {   // portes : gros blocs magenta et vert d'eau
       const y0 = cote * 1.4, y1 = cote * 1.45, lo = Math.min(y0, y1), hi = Math.max(y0, y1);
-      for (const [a, b] of PORTES) { const xa = px(a), xb = px(b), xm = (xa + xb) / 2; M.magenta.boite(xa, xm, lo, hi, 1.05, 3.45); M.vert.boite(xm, xb, lo, hi, 1.05, 3.45); }
+      for (const [a, b] of PORTES) { const xa = px(a), xb = px(b), xm = (xa + xb) / 2, e = (xb - xa) * 0.18; M.magenta.boite(xa + e, xm, lo, hi, 1.05, 3.45); M.vert.boite(xm, xb - e, lo, hi, 1.05, 3.45); }   // bandes de portes affinées (36 % de largeur en moins, comme les bandes du détaillé)
     }
     const p1 = (L - COTES.entraxePivots) / 2;
     for (const pivot of [p1, p1 + COTES.entraxePivots]) for (const dx of [-1.2, 1.2]) for (const cote of [1, -1]) {

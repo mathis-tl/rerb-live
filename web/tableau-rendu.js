@@ -43,10 +43,10 @@ const SANS_POSITION = [
 // cible en pixels, comme l'icône) ; en dessous de 15 on garde l'icône (le détaillé agrandi y était moins lisible : essai du seuil 12, comparaison-zoom.html).
 const ZOOM_DETAIL = 15, ZOOM_PLEIN = 16, ZOOM_CIBLE = 15, CIBLE_RAME_PX = 40, CIBLE_LARGEUR_PX = 10, LONGUEUR_RAME_M = 104.05, LARGEUR_ICONE_M = 4.2, LARGEUR_CAISSE_M = 2.798;
 const metresParPixel = zoom => 78271.517 * Math.cos(48.8 * Math.PI / 180) / Math.pow(2, zoom);
-function echelleTrain(zoom, ancien = false) {   // ancien = comportement de la carte actuelle : détaillé à taille réelle dès le zoom 16, icône agrandie en dessous (sert à la page de comparaison)
+function echelleTrain(zoom, ancien = false, force = null) {   // force : "icone" ou "detail" impose le modèle (comparaison des deux à la même échelle)   // ancien = comportement de la carte actuelle : détaillé à taille réelle dès le zoom 16, icône agrandie en dessous (sert à la page de comparaison)
   const borne = (v, max) => Math.min(max, Math.max(1, v)), mpp = metresParPixel(zoom);
   if (ancien && zoom >= ZOOM_PLEIN) return { detail: true, longueur: 1, largeur: 1 };
-  if (!ancien && zoom >= ZOOM_DETAIL) {   // modèle détaillé : facteurs d'agrandissement en longueur et en largeur/hauteur (1 = taille réelle)
+  if (force !== "icone" && (force === "detail" || (!ancien && zoom >= ZOOM_DETAIL))) {   // modèle détaillé : facteurs d'agrandissement en longueur et en largeur/hauteur (1 = taille réelle)
     const t = Math.min(1, Math.max(0, (ZOOM_PLEIN - zoom) / (ZOOM_PLEIN - ZOOM_CIBLE))), lisse = t * t * (3 - 2 * t);
     const cibleL = borne(CIBLE_RAME_PX * mpp / LONGUEUR_RAME_M, 60), cibleW = borne(CIBLE_LARGEUR_PX * mpp / LARGEUR_CAISSE_M, 120);
     return { detail: true, longueur: 1 + (cibleL - 1) * lisse, largeur: 1 + (cibleW - 1) * lisse };
@@ -55,7 +55,7 @@ function echelleTrain(zoom, ancien = false) {   // ancien = comportement de la c
 }
 const MODELES = { motrice: ModeleZ8100.construire({ voiture: 0 }), remorque: ModeleZ8100.construire({ voiture: 1 }), icone: ModeleZ8100.construire({ icone: true }) };
 // Proposé : l'icône (zoom < 15) reprend la palette du modèle détaillé (bandeau de vitres bleu-violet au lieu du bleu clair, bas de caisse sombre du modèle détaillé).
-const PALETTE_ALIGNEE = { bleu: [105, 128, 176], noir: [52, 56, 62] };
+const PALETTE_ALIGNEE = { bleu: [84, 100, 146], noir: [52, 56, 62] };
 const CENTRES_VOITURES_M = [39.0125, 13, -13, -39.0125];
 
 // --- vues
@@ -77,7 +77,7 @@ function lignesPlacees(vue) {   // grille de 2 colonnes pour les deux échelles 
 }
 
 function calques(vue, maintenant) {
-  const r = vue.reglages || reglages(), L = [], donnees = lignesPlacees(vue), ech = echelleTrain(vue.zoom, !!vue.ancien);
+  const r = vue.reglages || reglages(), L = [], donnees = lignesPlacees(vue), ech = echelleTrain(vue.zoom, !!vue.ancien, vue.force);
   const matiere = { ambient: 0.55, diffuse: 0.65, shininess: 24, specularColor: [90, 90, 90] };
   const nom = COULEUR_NOM[vue.theme];
   if (ech.detail) {   // de près : quatre caisses par rame, posées sur une voie droite orientée vers l'est

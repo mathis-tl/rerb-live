@@ -375,7 +375,7 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("PathLayer", self.js)
 
     def test_palette_de_l_icone_alignee_sur_le_detaille(self):
-        self.assertIn("PALETTE_ICONE = { bleu: [105, 128, 176], noir: [52, 56, 62] }", self.js)
+        self.assertIn("PALETTE_ICONE = { bleu: [84, 100, 146], noir: [52, 56, 62] }", self.js)
         self.assertIn("PALETTE_ICONE[piece.nom] || piece.couleur", self.js)
 
     # --- rame articulée : chaque caisse sur la voie

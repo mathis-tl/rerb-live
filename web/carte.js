@@ -32,7 +32,7 @@ const MODELES = { motrice: ModeleZ8100.construire({ voiture: 0 }), remorque: Mod
 const ZOOM_DETAIL = 15, ZOOM_PLEIN = 16, CIBLE_RAME_PX = 40, CIBLE_LARGEUR_PX = 10;
 const LONGUEUR_RAME_M = 104.05, LARGEUR_ICONE_M = 4.2, LARGEUR_CAISSE_M = 2.798;
 // Palette de l'icône alignée sur le modèle détaillé (bandeau de vitres bleu-violet, bas de caisse sombre) pour que le passage au zoom 15 se voie peu.
-const PALETTE_ICONE = { bleu: [105, 128, 176], noir: [52, 56, 62] };
+const PALETTE_ICONE = { bleu: [84, 100, 146], noir: [52, 56, 62] };
 function echelleTrain(zoom) {
   const metresParPixel = 78271.517 * Math.cos(48.8 * Math.PI / 180) / Math.pow(2, zoom);
   const borne = (v, max) => Math.min(max, Math.max(1, v));
