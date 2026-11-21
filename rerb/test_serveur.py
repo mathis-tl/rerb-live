@@ -789,6 +789,78 @@ class TestHttp(unittest.TestCase):
             self.assertEqual(r.read(), b"wOF2")
             self.assertEqual(r.headers["Content-Type"], "font/woff2")
 
+    # --- fichiers statiques : revalidation (ETag), compression, HEAD (analyse de fluidité du 21/11)
+    def _requete(self, chemin, methode="GET", **en_tetes):
+        req = urllib.request.Request(self.base + chemin, method=methode, headers=en_tetes)
+        try:
+            return urllib.request.urlopen(req)
+        except urllib.error.HTTPError as e:
+            return e
+
+    def test_statique_revalidable_avec_etag_et_304(self):
+        with self._requete("/vendor/lib.js") as r:
+            etag = r.headers["ETag"]
+            self.assertEqual(r.headers["Cache-Control"], "no-cache", "toujours revalidé (le code change), mais 304 sans corps si identique")
+        self.assertTrue(etag)
+        r = self._requete("/vendor/lib.js", **{"If-None-Match": etag})
+        self.assertEqual(r.code, 304)
+        self.assertEqual(r.read(), b"")
+        r = self._requete("/vendor/lib.js", **{"If-None-Match": '"autre"'})
+        self.assertEqual(r.code, 200)
+
+    def test_etag_change_quand_le_fichier_change(self):
+        with self._requete("/vendor/lib.js") as r:
+            avant = r.headers["ETag"]
+        (self.web / "vendor" / "lib.js").write_text("var a=2222;", encoding="utf-8")
+        with self._requete("/vendor/lib.js") as r:
+            self.assertNotEqual(r.headers["ETag"], avant)
+
+    def test_donnees_dynamiques_restent_sans_cache(self):
+        for route in ("/trains", "/geo"):
+            with self._requete(route) as r:
+                self.assertEqual(r.headers["Cache-Control"], "no-store", route)
+                self.assertIsNone(r.headers["ETag"])
+
+    def test_gros_fichier_texte_compresse_en_gzip_si_demande(self):
+        import gzip
+        gros = json.dumps({"batiments": [[2.1, 48.7]] * 2000})
+        (self.web / "vendor" / "gros.json").write_text(gros, encoding="utf-8")
+        with self._requete("/vendor/gros.json", **{"Accept-Encoding": "gzip"}) as r:
+            brut = r.read()
+            self.assertEqual(r.headers["Content-Encoding"], "gzip")
+            self.assertEqual(r.headers["Vary"], "Accept-Encoding")
+            self.assertEqual(r.headers["Content-Length"], str(len(brut)))
+        self.assertEqual(gzip.decompress(brut).decode("utf-8"), gros)
+        self.assertLess(len(brut), len(gros) / 3)
+
+    def test_pas_de_gzip_sans_demande_ni_pour_les_petits_fichiers_ni_les_polices(self):
+        gros = json.dumps({"batiments": [[2.1, 48.7]] * 2000})
+        (self.web / "vendor" / "gros.json").write_text(gros, encoding="utf-8")
+        (self.web / "vendor" / "grosse.woff2").write_bytes(b"x" * 5000)
+        with self._requete("/vendor/gros.json", **{"Accept-Encoding": "identity"}) as r:
+            self.assertIsNone(r.headers["Content-Encoding"])
+            self.assertEqual(r.read().decode("utf-8"), gros)
+        with self._requete("/vendor/lib.js", **{"Accept-Encoding": "gzip"}) as r:
+            self.assertIsNone(r.headers["Content-Encoding"])
+        with self._requete("/vendor/grosse.woff2", **{"Accept-Encoding": "gzip"}) as r:
+            self.assertIsNone(r.headers["Content-Encoding"], "woff2 est déjà compressé")
+
+    def test_etag_distinct_selon_la_compression(self):
+        gros = json.dumps({"batiments": [[2.1, 48.7]] * 2000})
+        (self.web / "vendor" / "gros.json").write_text(gros, encoding="utf-8")
+        with self._requete("/vendor/gros.json", **{"Accept-Encoding": "gzip"}) as r:
+            e1 = r.headers["ETag"]
+        with self._requete("/vendor/gros.json") as r:
+            e2 = r.headers["ETag"]
+        self.assertNotEqual(e1, e2, "un cache intermédiaire ne doit pas mélanger les deux versions")
+
+    def test_head_repond_comme_get_sans_corps(self):
+        with self._requete("/vendor/lib.js", "HEAD") as r:
+            self.assertEqual(r.status, 200)
+            self.assertEqual(r.headers["Content-Length"], "8")
+            self.assertEqual(r.read(), b"")
+        self.assertEqual(self._requete("/secret", "HEAD").code, 404)
+
     def test_statique_refuse_sortie_de_racine_dotfile_et_type_inconnu(self):
         import http.client
         for chemin in ("/../dehors.txt", "/%2e%2e/dehors.txt", "/vendor/../../dehors.txt", "/.secret", "/note.exe",

@@ -561,6 +561,11 @@ class TestCodeCarte(unittest.TestCase):
             self.assertIn(famille + ":", corps)
         self.assertIn("decouperEnLots(liste, TAILLE_LOT[t])", corps)
 
+    def test_premiere_selection_echauffee_au_chargement(self):
+        self.assertIn("function echaufferSelection(", self.js)
+        self.assertIn("deckgl.pickObject(", self.js.split("function echaufferSelection(")[1].split("\n}\n")[0])
+        self.assertIn("lancerVitrine(); echaufferSelection();", self.js)
+
     def test_decor_attend_la_fin_du_geste(self):
         # glisser / molette / rotation : aucune cellule ajoutée tant que l'utilisateur bouge (160 ms de calme), sinon chaque ajout vole une image
         self.assertIn("dernierGeste = performance.now()", self.js)

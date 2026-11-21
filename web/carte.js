@@ -999,7 +999,7 @@ async function actualiser() {
     if (!Array.isArray(d.trains)) throw new Error("réponse invalide");
     statut = d; trains = d.trains; derniereReponseMs = performance.now(); majAffiches(derniereReponseMs);
     if (d.trains.length || (!d.erreur && !d.bloque)) premiereReponse = true;
-    lancerVitrine();
+    lancerVitrine(); echaufferSelection();
     if (selection && !trains.some(t => t.course === selection)) { selection = null; suivi = null; }   // le train choisi a disparu
   } catch (e) {
     const lent = e && e.name === "AbortError";
@@ -1025,6 +1025,14 @@ function afficherChargement(e) {
 let accueilFerme = false, accueilSortie = false, vitrineMain = false, vitrineCourse = null;
 const vitrineEnCours = () => vitrineActive({ ferme: accueilFerme, sortie: accueilSortie });
 const mouvementReduit = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+// La première sélection d'objet sous la souris compile les shaders de sélection : jusqu'à 185 ms d'arrêt au premier survol (mesure du 21/11).
+// On la fait une fois, sans que personne ne regarde, quelques secondes après l'arrivée des trains.
+let selectionEchauffee = false;
+function echaufferSelection() {
+  if (selectionEchauffee || !deckgl) return;
+  selectionEchauffee = true;
+  setTimeout(() => { try { deckgl.pickObject({ x: 4, y: 4, radius: 0 }); } catch (e) { /* sans effet : le premier survol compilera */ } }, 1500);
+}
 function lancerVitrine() {   // caméra de suivi sur un train qui circule (jamais si le visiteur a pris la main)
   if (!vitrineEnCours() || vitrineMain || !premiereReponse) return;
   if (vitrineCourse && trainAffiche(vitrineCourse)) return;

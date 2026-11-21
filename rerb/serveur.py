@@ -13,6 +13,7 @@ Bibliothèque standard seulement. Les tests n'appellent jamais le réseau (fauss
 """
 import argparse
 import functools
+import gzip
 import http.client
 import json
 import math
@@ -43,6 +44,15 @@ WEB = RACINE / "web"
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png",
          ".glb": "model/gltf-binary", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8"}
+COMPRESSIBLES = {".html", ".js", ".css", ".json", ".svg", ".txt"}   # woff2 et png sont déjà compressés
+SEUIL_GZIP_OCTETS = 1024
+
+
+@functools.lru_cache(maxsize=256)
+def _gzip_fichier(chemin, mtime_ns, taille):   # le contenu du fichier est relu, mtime et taille ne servent que de clé de cache
+    return gzip.compress(Path(chemin).read_bytes(), compresslevel=6, mtime=0)
+
+
 # Le navigateur lui-même refuse toute requête hors de ce serveur (aucun CDN, aucune tuile, aucun envoi à un tiers).
 EN_TETES = {
     "Content-Security-Policy": ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
@@ -409,9 +419,11 @@ def creer_serveur(releveur, distance, localiser, nom_gare, port=8765, horloge=No
         }
 
     class Gestionnaire(BaseHTTPRequestHandler):
+        cache_controle = None   # remplace "no-store" pour les fichiers statiques (revalidation par ETag)
+
         def end_headers(self):   # en-têtes de sécurité sur TOUTES les réponses, erreurs comprises
             for cle, valeur in EN_TETES.items():
-                self.send_header(cle, valeur)
+                self.send_header(cle, self.cache_controle if cle == "Cache-Control" and self.cache_controle else valeur)
             super().end_headers()
 
         def _envoyer(self, octets, type_mime):
@@ -420,6 +432,37 @@ def creer_serveur(releveur, distance, localiser, nom_gare, port=8765, horloge=No
             self.send_header("Content-Length", str(len(octets)))
             self.end_headers()
             self.wfile.write(octets)
+
+        def _envoyer_statique(self, f, corps=True):
+            """Fichier du site : ETag (taille + date) pour que le navigateur revalide sans retélécharger (304), gzip pour les gros fichiers texte."""
+            st = f.stat()
+            gzip_ok = (f.suffix.lower() in COMPRESSIBLES and st.st_size >= SEUIL_GZIP_OCTETS
+                       and "gzip" in self.headers.get("Accept-Encoding", "").lower())
+            etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}{"-gz" if gzip_ok else ""}"'
+            self.cache_controle = "no-cache"
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.end_headers()
+                return
+            octets = _gzip_fichier(str(f), st.st_mtime_ns, st.st_size) if gzip_ok else f.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", TYPES[f.suffix.lower()])
+            self.send_header("Content-Length", str(len(octets)))
+            self.send_header("ETag", etag)
+            self.send_header("Vary", "Accept-Encoding")
+            if gzip_ok:
+                self.send_header("Content-Encoding", "gzip")
+            self.end_headers()
+            if corps:
+                self.wfile.write(octets)
+
+        def do_HEAD(self):
+            f = fichier_statique(racine_web, self.path) if self.path.split("?")[0] not in ("/trains", "/statut", "/gare", "/geo") else None
+            if f is None:
+                self.send_error(404)
+                return
+            self._envoyer_statique(f, corps=False)
 
         def _ref_gare(self):
             """Valeur du paramètre `ref` si c'est EXACTEMENT un paramètre de la liste blanche, sinon None."""
@@ -452,7 +495,7 @@ def creer_serveur(releveur, distance, localiser, nom_gare, port=8765, horloge=No
                 if f is None:
                     self.send_error(404)
                     return
-                self._envoyer(f.read_bytes(), TYPES[f.suffix.lower()])
+                self._envoyer_statique(f)
 
         def log_message(self, *args):  # pas de journal d'accès sur l'écran
             pass
