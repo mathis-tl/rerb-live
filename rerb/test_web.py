@@ -93,6 +93,68 @@ class TestCodeCarte(unittest.TestCase):
                                 capture_output=True, text=True, timeout=30, check=True).stdout
         return json.loads(sortie)
 
+    # --- chargement, pause de l'onglet caché, erreurs
+    def _chargement(self, expression):
+        return self._node("// --- chargement", "// --- fin chargement", expression)
+
+    def test_chargement_message_puis_message_de_lenteur(self):
+        base = {"recu": False, "attenteMs": 0, "erreur": None, "bloque": False, "reessai": False}
+        e = self._chargement("etatChargement(%s)" % json.dumps(base))
+        self.assertEqual((e["type"], e["reessayer"]), ("attente", False))
+        self.assertIn("Chargement des trains du RER B", e["message"])
+        e = self._chargement("etatChargement(%s)" % json.dumps({**base, "attenteMs": 8000}))
+        self.assertEqual(e["type"], "lent")
+        self.assertIn("PRIM met du temps à répondre", e["message"])
+
+    def test_chargement_disparait_des_que_des_donnees_sont_recues(self):
+        self.assertIsNone(self._chargement('etatChargement({recu: true, attenteMs: 99999, erreur: "x", bloque: true, reessai: false})'))
+
+    def test_chargement_echec_propose_de_reessayer_et_bloque_non(self):
+        e = self._chargement('etatChargement({recu: false, attenteMs: 500, erreur: "serveur local injoignable", bloque: false, reessai: false})')
+        self.assertEqual((e["type"], e["reessayer"]), ("echec", True))
+        self.assertIn("serveur local injoignable", e["message"])
+        e = self._chargement('etatChargement({recu: false, attenteMs: 500, erreur: "HTTP 401", bloque: true, reessai: false})')
+        self.assertEqual((e["type"], e["reessayer"]), ("bloque", False))
+
+    def test_chargement_nouvel_essai_manuel_remet_le_message_d_attente(self):
+        e = self._chargement('etatChargement({recu: false, attenteMs: 100, erreur: "x", bloque: false, reessai: true})')
+        self.assertEqual(e["type"], "attente")
+
+    def test_pastille_mise_a_jour_et_erreur_apres_les_premieres_donnees(self):
+        f = lambda **k: self._chargement("etatDonnees(%s)" % json.dumps({"enCours": False, "ageS": 10, "erreur": None, "bloque": False, "reveil": False, **k}))
+        self.assertIsNone(f())
+        self.assertIsNone(f(enCours=True, ageS=10), "mise à jour de routine : rien à montrer")
+        self.assertIn("Mise à jour", f(enCours=True, ageS=200)["message"])
+        self.assertIn("Mise à jour", f(enCours=True, reveil=True)["message"], "retour sur l'onglet : on prévient")
+        e = f(erreur="serveur local injoignable")
+        self.assertEqual(e["type"], "erreur")
+        self.assertIn("dernier relevé", e["message"])
+        self.assertEqual(f(bloque=True, erreur="HTTP 401")["type"], "bloque")
+
+    def test_onglet_cache_aucune_interrogation(self):
+        self.assertIs(self._chargement("interrogationActive(true)"), False)
+        self.assertIs(self._chargement("interrogationActive(false)"), True)
+
+    def test_la_page_se_met_en_pause_et_reprend_au_retour(self):
+        self.assertIn('addEventListener("visibilitychange"', self.js)
+        for fonction in ("function actualiser()", "function actualiserGare()"):
+            corps = self.js.split(fonction)[1][:600]
+            self.assertIn("interrogationActive(document.hidden)", corps, fonction)
+
+    def test_requete_trains_a_un_delai_maximal(self):
+        corps = self.js.split("async function actualiser()")[1].split("let maj = false")[0]
+        self.assertIn("AbortController", corps)
+        self.assertIn("DELAI_REQUETE_MS", corps)
+
+    def test_page_porte_l_ecran_de_chargement_accessible(self):
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        self.assertRegex(html, r'id="chargement"[^>]*role="status"')
+        self.assertIn('id="chargement-reessayer"', html)
+        self.assertIn('id="etat-donnees"', html)
+        css = (WEB / "carte.css").read_text(encoding="utf-8")
+        self.assertIn("@keyframes tourner", css)
+        self.assertIn("prefers-reduced-motion", css, "animation coupée si l'utilisateur le demande")
+
     def _echelle(self, zoom):
         return self._node("// --- échelle du train", "// --- fin échelle du train", f"echelleTrain({zoom})")
 

@@ -57,7 +57,24 @@ select { font: inherit; width: 100%; padding: 4px 6px; margin-bottom: 4px; }
   background: rgba(255, 253, 248, .97); border: 1px solid #d9d2c3; border-radius: 10px; box-shadow: 0 2px 10px rgba(0, 0, 0, .3); }
 #fiche-train h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #5b6770; margin: 0 0 6px; }
 #fiche-train[hidden], #suggestions[hidden] { display: none; }
+#chargement { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+              background: rgba(233, 228, 216, .92); text-align: center; padding: 20px; }
+#chargement[hidden], #etat-donnees[hidden] { display: none; }
+#chargement p { margin: 0; font-size: 16px; max-width: 420px; }
+#chargement p.note { font-size: 13px; }
+#chargement button { margin-top: 12px; padding: 8px 16px; }
+.roue { width: 44px; height: 44px; margin-bottom: 12px; border: 5px solid #c9d3dc; border-top-color: var(--rer); border-radius: 50%; animation: tourner 1s linear infinite; }
+#chargement[data-type=echec] .roue, #chargement[data-type=bloque] .roue { display: none; }
+@keyframes tourner { to { transform: rotate(360deg); } }
+#etat-donnees { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 6; padding: 6px 14px; border-radius: 16px; font-size: 13px;
+                background: rgba(255, 253, 248, .96); border: 1px solid #d9d2c3; box-shadow: 0 1px 6px rgba(0, 0, 0, .25); }
+#etat-donnees[data-type=erreur], #etat-donnees[data-type=bloque] { background: #fde8e8; border-color: #e08a8a; }
+@media (prefers-reduced-motion: reduce) { .roue { animation-duration: 4s; } }
 @media (prefers-color-scheme: dark) {
+  #chargement { background: rgba(20, 26, 36, .92); color: #e8edf3; }
+  #chargement .note { color: #a9b6c5; }
+  .roue { border-color: #3a4558; border-top-color: #6aa7e6; }
+  #etat-donnees { background: rgba(28, 34, 46, .96); color: #e8edf3; border-color: #3a4558; }
   #recherche, #suggestions, #direction-boite, #commandes-carte button, #fiche-train { background: rgba(28, 34, 46, .96); color: #e8edf3; border-color: #3a4558; }
   #suggestions li.actif { background: #2b3a55; }
   #commandes-carte button[aria-pressed=true] { background: #2b6cb0; }

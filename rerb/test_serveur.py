@@ -713,6 +713,7 @@ class TestHttp(unittest.TestCase):
         self.addCleanup(self.dossier.cleanup)
         f = Fausse([livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))])
         plafond = Plafond(Path(self.dossier.name) / "p.json", 1000, lambda: date(2026, 11, 16))
+        self.fausse = f
         self.releveur = Releveur(f, plafond, intervalle_s=120)
         self.horloge = lambda: T0 + timedelta(seconds=180)
         self.web = Path(self.dossier.name) / "web"
@@ -739,6 +740,12 @@ class TestHttp(unittest.TestCase):
         self.addCleanup(self.serveur.server_close)
         self.addCleanup(self.serveur.shutdown)
         self.base = f"http://127.0.0.1:{self.serveur.server_address[1]}"
+
+    def test_sans_visiteur_aucun_appel_prim(self):
+        # chargement à la demande : le serveur lancé, personne sur la page = zéro appel PRIM (ni trains ni gares)
+        self.assertEqual(self.fausse.appels, 0)
+        self.assertEqual(self.appels_gare, [])
+        self.assertEqual(self.releveur.plafond.utilises, 0)
 
     def test_ecoute_localhost_seulement(self):
         self.assertEqual(self.serveur.server_address[0], "127.0.0.1")

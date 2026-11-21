@@ -11,6 +11,30 @@ window.fetch = (url, options) => {
 };
 
 const INTERVALLE_MS = 3000;            // le serveur n'appelle PRIM qu'au plus toutes les 120 s : interroger plus souvent ne coûte rien
+
+// --- chargement
+// Le serveur n'appelle PRIM que lorsqu'une page demande /trains : la page ne doit donc interroger que lorsqu'elle est regardée.
+const DELAI_LENT_MS = 8000;             // au-delà, on explique que PRIM est lent
+const DELAI_REQUETE_MS = 45000;         // le serveur attend PRIM jusqu'à 30 s : au-delà de 45 s, la requête est abandonnée
+const SEUIL_MAJ_S = 120;                // relevé plus vieux que l'intervalle serveur : le prochain /trains rappelle PRIM
+// Écran de chargement (avant les premières données). null = rien à montrer.
+function etatChargement({ recu, attenteMs, erreur, bloque, reessai }) {
+  if (recu) return null;
+  if (bloque) return { type: "bloque", reessayer: false, message: "PRIM refuse les appels (clé refusée ou quota atteint) : aucun train à afficher pour l'instant." };
+  if (erreur && !reessai) return { type: "echec", reessayer: true, message: "Les trains n'ont pas pu être chargés (" + erreur + ")." };
+  return attenteMs >= DELAI_LENT_MS
+    ? { type: "lent", reessayer: false, message: "PRIM met du temps à répondre… les trains arrivent." }
+    : { type: "attente", reessayer: false, message: "Chargement des trains du RER B…" };
+}
+// Pastille discrète une fois les premières données reçues. null = rien à montrer.
+function etatDonnees({ enCours, ageS, erreur, bloque, reveil }) {
+  if (bloque) return { type: "bloque", message: "PRIM ne répond plus (clé refusée ou quota) : positions du dernier relevé." };
+  if (erreur) return { type: "erreur", message: "Connexion perdue : positions du dernier relevé reçu." };
+  if (enCours && (reveil || ageS >= SEUIL_MAJ_S)) return { type: "maj", message: "Mise à jour des trains…" };
+  return null;
+}
+function interrogationActive(cache) { return !cache; }
+// --- fin chargement
 const COULEURS = { "à quai": [47, 133, 90], "en route": [43, 108, 176] };
 const ROUGE_TERMINUS = [226, 34, 48];   // train arrivé au terminus (séjour de 60 s avant de disparaître)
 const GRIS = [160, 167, 173];   // repli d'un état inconnu seulement
@@ -763,6 +787,7 @@ function afficherProchains() {
 
 let sequenceGare = 0, gareEnCours = false;
 async function actualiserGare() {
+  if (!interrogationActive(document.hidden)) return;   // onglet caché : pas d'appel
   if (gareEnCours) return;                        // pas d'empilement si le serveur est lent
   gareEnCours = true;
   const demandee = gareChoisie, numero = ++sequenceGare;
@@ -781,22 +806,53 @@ async function actualiserGare() {
 
 let trainsEnCours = false;
 async function actualiser() {
+  if (!interrogationActive(document.hidden)) return;   // onglet caché : on n'interroge pas, donc on ne déclenche aucun appel PRIM
   if (trainsEnCours) return;                      // pas d'empilement : une seule requête /trains à la fois
   trainsEnCours = true;
+  debutRequeteMs = performance.now();
+  setTimeout(majChargement, 900);                 // la pastille « mise à jour » n'apparaît que si la requête traîne
+  const abandon = new AbortController(), minuteur = setTimeout(() => abandon.abort(), DELAI_REQUETE_MS);
   try {
-    const r = await fetch("/trains", { cache: "no-store" });
+    const r = await fetch("/trains", { cache: "no-store", signal: abandon.signal });
     const d = await r.json();
     if (!Array.isArray(d.trains)) throw new Error("réponse invalide");
-    statut = d; trains = d.trains; majAffiches(performance.now());
+    statut = d; trains = d.trains; derniereReponseMs = performance.now(); majAffiches(derniereReponseMs);
+    if (d.trains.length || (!d.erreur && !d.bloque)) premiereReponse = true;
     if (selection && !trains.some(t => t.course === selection)) { selection = null; suivi = null; }   // le train choisi a disparu
   } catch (e) {
-    statut = { ...(statut || {}), erreur: "serveur local injoignable", bloque: false, plafond: (statut && statut.plafond) || { utilises: "?", maximum: "?" } };
+    const lent = e && e.name === "AbortError";
+    statut = { ...(statut || {}), erreur: lent ? "le serveur local ne répond pas" : "serveur local injoignable", bloque: false, plafond: (statut && statut.plafond) || { utilises: "?", maximum: "?" } };
   }
-  trainsEnCours = false;
-  panneau(); detail_train(); majFiche(); afficherProchains(); afficher(); animer();
+  clearTimeout(minuteur);
+  trainsEnCours = false; reessai = false; reveil = false; debutRequeteMs = null;
+  majChargement(); panneau(); detail_train(); majFiche(); afficherProchains(); afficher(); animer();
 }
 
 let maj = false;
+
+// --- état du chargement
+let premiereReponse = false, debutAttente = performance.now(), reessai = false, reveil = false;
+let derniereReponseMs = null, debutRequeteMs = null, chargementForce = null, actionReessayer = null;
+function afficherChargement(e) {
+  const b = $("chargement");
+  b.hidden = !e;
+  if (!e) return;
+  b.dataset.type = e.type;
+  $("chargement-message").textContent = e.message;
+  $("chargement-reessayer").hidden = !e.reessayer;
+}
+function majChargement() {
+  if (chargementForce) { afficherChargement(chargementForce); return; }
+  const erreur = statut && (statut.erreur || null);
+  afficherChargement(etatChargement({ recu: premiereReponse, attenteMs: performance.now() - debutAttente, erreur, bloque: !!(statut && statut.bloque), reessai }));
+  const p = $("etat-donnees"), maintenant = performance.now();
+  const e = premiereReponse ? etatDonnees({
+    enCours: trainsEnCours && debutRequeteMs != null && maintenant - debutRequeteMs > 800,   // pas de clignotement pour une requête rapide
+    ageS: derniereReponseMs == null ? 0 : (maintenant - derniereReponseMs) / 1000,
+    erreur, bloque: !!(statut && statut.bloque), reveil }) : null;
+  p.hidden = !e;
+  if (e) { p.dataset.type = e.type; p.textContent = e.message; }
+}
 
 function reglerDirection(d) {
   filtreDirection = d;
@@ -838,6 +894,11 @@ function initialiserRecherche() {
 }
 
 async function demarrer() {
+  $("chargement-reessayer").addEventListener("click", () => {
+    if (actionReessayer) { actionReessayer(); return; }
+    reessai = true; debutAttente = performance.now(); majChargement(); actualiser();
+  });
+  const minuterieChargement = setInterval(() => { if (premiereReponse) clearInterval(minuterieChargement); majChargement(); }, 1000);
   document.querySelectorAll("input[name=mode]").forEach(i => i.addEventListener("change", () => {
     mode = i.value; $("avertissement-train").hidden = mode !== "train"; afficher();
   }));
@@ -851,6 +912,9 @@ async function demarrer() {
   } catch (e) {
     const b = $("bandeau-erreur"); b.hidden = false;
     b.textContent = "Impossible de charger le tracé (" + e.message + "). Le serveur local tourne-t-il ? Recharge la page.";
+    chargementForce = { type: "echec", reessayer: true, message: "Le tracé de la ligne n'a pas pu être chargé (" + e.message + "). Le serveur local tourne-t-il ?" };
+    actionReessayer = () => location.reload();
+    majChargement();
     return;
   }
   const choix = $("choix-gare");
@@ -885,6 +949,12 @@ async function demarrer() {
     const [longitude, latitude, z, pitch, bearing] = v.split(",").map(Number);
     if ([longitude, latitude, z].every(Number.isFinite)) appliquerVue({ longitude, latitude, zoom: z, pitch: pitch || 0, bearing: bearing || 0 });
   }
+  // retour sur l'onglet : reprise immédiate (le serveur rappelle PRIM si son relevé a plus de 120 s)
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    if (!premiereReponse) debutAttente = performance.now();
+    reveil = true; actualiser(); actualiserGare();
+  });
   await actualiser();
   setInterval(actualiser, INTERVALLE_MS);
   actualiserGare();
