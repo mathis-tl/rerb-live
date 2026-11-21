@@ -214,8 +214,8 @@ class TestCodeCarte(unittest.TestCase):
 
     def test_rails_ont_leur_propre_calque_visible_de_loin(self):
         corps = self.js.split("function calquesDecor(")[1].split("// --- noms de gares")[0]
-        self.assertIn('"rails-" + k', corps)
-        rail = corps.split('"rails-" + k')[1][:400]
+        self.assertIn("rails: (id, data)", corps)
+        rail = corps.split("rails: (id, data)")[1][:400]
         m = re.search(r"widthMinPixels: ([0-9.]+)", rail)
         self.assertIsNotNone(m)
         self.assertGreaterEqual(float(m.group(1)), 1.0)
@@ -535,6 +535,39 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("fusionnerPieces(", self.js)
         self.assertIn("simple: true", self.js)
 
+    # --- décor progressif : une étape par image (les bâtiments d'une cellule bloquaient jusqu'à 150 ms)
+    def _decor(self, expression):
+        return self._node("// --- decor progressif", "// --- fin decor progressif", expression)
+
+    def test_decor_une_seule_etape_par_image(self):
+        r = self._decor("""(() => { const m = new Map(); const out = [];
+          for (let i = 0; i < 6; i++) { const q = avancerDecor(m, ["a", "b"], k => 3); out.push([m.get("a") || 0, m.get("b") || 0, q]); } return out; })()""")
+        self.assertEqual(r, [[1, 0, True], [2, 0, True], [3, 0, True], [3, 1, True], [3, 2, True], [3, 3, False]])
+
+    def test_decor_oublie_les_cellules_sorties_du_champ(self):
+        r = self._decor("""(() => { const m = new Map([["a", 3], ["z", 2]]); avancerDecor(m, ["a"], k => 3); return Array.from(m.keys()); })()""")
+        self.assertEqual(r, ["a"])
+
+    def test_decor_complet_ne_demande_plus_d_image(self):
+        self.assertFalse(self._decor("""avancerDecor(new Map([["a", 5]]), ["a"], k => 5)"""))
+
+    def test_etapes_d_une_cellule_une_par_lot(self):
+        self.assertEqual(self._decor("etapesCellule({ lots: [{}, {}, {}] })"), 3)
+        self.assertEqual(self._decor("decouperEnLots(Array.from({ length: 2001 }, (_, i) => i), 800).map(l => l.length)"), [800, 800, 401])
+
+    def test_preparer_cellule_decoupe_toutes_les_familles_en_lots_ordonnes(self):
+        corps = self.js.split("function preparerCellule(")[1].split("\n}\n")[0]
+        for famille in ("surfaces", "lignes", "rails", "batiments"):
+            self.assertIn(famille + ":", corps)
+        self.assertIn("decouperEnLots(liste, TAILLE_LOT[t])", corps)
+
+    def test_decor_attend_la_fin_du_geste(self):
+        # glisser / molette / rotation : aucune cellule ajoutée tant que l'utilisateur bouge (160 ms de calme), sinon chaque ajout vole une image
+        self.assertIn("dernierGeste = performance.now()", self.js)
+        corps = self.js.split("function cellulesAMontrer(")[1].split("\n}\n")[0]
+        self.assertIn("DELAI_GESTE_MS", corps)
+        self.assertIn("setTimeout(suite, DELAI_GESTE_MS)", corps)
+
     def _echelle(self, zoom):
         return self._node("// --- échelle du train", "// --- fin échelle du train", f"echelleTrain({zoom})")
 
@@ -753,8 +786,9 @@ class TestCodeCarte(unittest.TestCase):
 
     def test_decor_par_cellule_pas_de_refonte_globale(self):
         # avant : toutes les cellules fusionnées en un seul jeu de données, tout recalculé à chaque cellule arrivée (saccades au déplacement)
-        self.assertIn('id: "surfaces-" + k', self.js)
-        self.assertIn('id: "batiments-" + k', self.js)
+        self.assertIn('lot.t + "-" + k + "-" + i', self.js, "un calque par cellule et par lot")
+        self.assertIn("surfaces: (id, data)", self.js)
+        self.assertIn("batiments: (id, data)", self.js)
         self.assertNotIn("flatMap", self.js.split("function calquesDecor")[1].split("\n}\n")[0], "pas de fusion de toutes les cellules")
         self.assertIn("cellulesAMontrer", self.js, "une seule nouvelle cellule par image")
 

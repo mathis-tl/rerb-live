@@ -331,13 +331,14 @@ let indexDecor = null, vueCarte = { longitude: 2.2588, latitude: 48.7255, zoom: 
 const cellulesDecor = new Map(), enChargement = new Set();   // cellule -> décor préparé (null = absente/erreur)
 const LARGEUR_ROUTE = { grand: 12, moyen: 9, petit: 6, pieton: 2.5 };
 
-function preparerCellule(d) {   // regroupe en 3 jeux de données par cellule (surfaces, lignes, bâtiments) une seule fois, au chargement
-  return {
+function preparerCellule(d) {   // regroupe en jeux de données par famille, découpés en lots (un lot affiché par image, voir decor progressif), une seule fois au chargement
+  const jeux = {
     surfaces: [...d.verts.map(p => ({ p, t: "vert" })), ...d.eaux.map(p => ({ p, t: "eau" })), ...d.quais.map(p => ({ p, t: "quai" }))],
     lignes: [...d.cours_eau.map(c => ({ c, t: "eau", w: 6 })), ...d.routes.map(r => ({ c: r.c, t: r.t, w: LARGEUR_ROUTE[r.t] }))],
     rails: d.rails.map(c => ({ c, t: "rail", w: 1.2 })),   // calque à part : visible de loin (au moins 1 px), sans épaissir les routes
     batiments: d.batiments,
   };
+  return { lots: Object.entries(jeux).flatMap(([t, liste]) => decouperEnLots(liste, TAILLE_LOT[t]).map(donnees => ({ t, donnees }))) };
 }
 
 function clesVisibles() {
@@ -381,36 +382,59 @@ async function chargerDecor() {
 }
 sombre.addEventListener("change", () => { appliquerTheme(); afficher(); });
 
-// Une seule NOUVELLE cellule par image : le calcul des bâtiments d'une cellule (plusieurs dizaines de milliers de polygones) bloque l'image ;
-// en les ajoutant une par une, le déplacement de la carte reste fluide au lieu de se figer quand plusieurs cellules arrivent ensemble.
-const cellulesMontrees = new Set();
-let ajoutEnAttente = false;
-function cellulesAMontrer() {
-  const pretes = clesPretes(), sortie = [];
-  let nouvelle = false, attente = false;
-  for (const k of cellulesMontrees) if (!pretes.includes(k)) cellulesMontrees.delete(k);   // sorties du champ : à re-étaler quand elles reviennent
+// --- decor progressif
+// Créer d'un coup les calques d'une cellule (surtout ses bâtiments : jusqu'à 3 000 polygones à découper en triangles) bloquait l'image jusqu'à 150 ms
+// pendant un déplacement ou un zoom. On les ajoute donc UNE ÉTAPE par image : un lot de 700 à 1 500 éléments à la fois (surfaces, routes, rails, puis bâtiments).
+const TAILLE_LOT = { surfaces: 1500, lignes: 700, rails: 700, batiments: 700 };
+function decouperEnLots(liste, taille) { const lots = []; for (let i = 0; i < liste.length; i += taille) lots.push(liste.slice(i, i + taille)); return lots; }
+function etapesCellule(cell) { return cell.lots.length; }
+// `montre` : clé de cellule -> nombre d'étapes déjà affichées. Avance d'UNE étape la première cellule incomplète ; renvoie vrai s'il en reste (il faut une autre image).
+function avancerDecor(montre, pretes, total) {
+  for (const k of [...montre.keys()]) if (!pretes.includes(k)) montre.delete(k);   // sorties du champ : à re-étaler quand elles reviennent
+  let avance = false, reste = false;
   for (const k of pretes) {
-    if (!cellulesMontrees.has(k)) { if (nouvelle) { attente = true; continue; } cellulesMontrees.add(k); nouvelle = true; }
-    sortie.push(k);
+    const n = montre.get(k) || 0;
+    if (n >= total(k)) continue;
+    if (avance) { reste = true; break; }
+    montre.set(k, n + 1); avance = true;
+    if (n + 1 < total(k)) reste = true;
   }
-  if (attente && !ajoutEnAttente) { ajoutEnAttente = true; requestAnimationFrame(() => { ajoutEnAttente = false; afficher(); }); }
-  return sortie;
+  return reste;
+}
+// --- fin decor progressif
+const decorMontre = new Map();
+let ajoutEnAttente = false;
+// Pendant un geste de l'utilisateur (glisser, molette, rotation) on n'ajoute rien : la carte suit le doigt à pleine vitesse, le décor arrive dès que le geste se calme.
+let dernierGeste = -1e9;
+const DELAI_GESTE_MS = 160;
+function cellulesAMontrer() {
+  const pretes = clesPretes(), attente = performance.now() - dernierGeste < DELAI_GESTE_MS;
+  const reste = attente ? pretes.some(k => (decorMontre.get(k) || 0) < etapesCellule(cellulesDecor.get(k))) : avancerDecor(decorMontre, pretes, k => etapesCellule(cellulesDecor.get(k)));
+  if (reste && !ajoutEnAttente) {
+    ajoutEnAttente = true;
+    const suite = () => { ajoutEnAttente = false; afficher(); };
+    if (attente) setTimeout(suite, DELAI_GESTE_MS); else requestAnimationFrame(suite);
+  }
+  return pretes.map(k => [k, cellulesDecor.get(k), decorMontre.get(k) || 0]);
 }
 
 function calquesDecor() {
   const c = palette(), theme = styleCarte + (sombre.matches ? 1 : 0), L = [], r = RENDU[styleCarte];
-  const cellules = indexDecor ? cellulesAMontrer().map(k => [k, cellulesDecor.get(k)]) : (decor ? [["massy", decor]] : []);
-  for (const [k, cell] of cellules) {
-    L.push(new deck.PolygonLayer({ id: "surfaces-" + k, data: cell.surfaces, getPolygon: d => d.p, getFillColor: d => c[d.t], updateTriggers: { getFillColor: [theme] }, stroked: false, filled: true }));
-    L.push(new deck.PathLayer({ id: "lignes-" + k, data: cell.lignes, getPath: d => d.c, getColor: d => c[d.t], getWidth: d => d.w, widthUnits: "meters", widthMinPixels: 0.6,
-      capRounded: true, jointRounded: true, updateTriggers: { getColor: [theme] } }));
-    L.push(new deck.PathLayer({ id: "rails-" + k, data: cell.rails, getPath: d => d.c, getColor: d => c.rail, getWidth: d => d.w, widthUnits: "meters", widthMinPixels: 1.1,
-      capRounded: true, jointRounded: true, updateTriggers: { getColor: [theme] } }));
-    L.push(new deck.PolygonLayer({ id: "batiments-" + k, data: cell.batiments, getPolygon: d => d.p, extruded: true, getElevation: d => d.h,
+  const cellules = indexDecor ? cellulesAMontrer() : (decor ? [["massy", decor, etapesCellule(decor)]] : []);
+  const fabrique = {
+    surfaces: (id, data) => new deck.PolygonLayer({ id, data, getPolygon: d => d.p, getFillColor: d => c[d.t], updateTriggers: { getFillColor: [theme] }, stroked: false, filled: true }),
+    lignes: (id, data) => new deck.PathLayer({ id, data, getPath: d => d.c, getColor: d => c[d.t], getWidth: d => d.w, widthUnits: "meters", widthMinPixels: 0.6,
+      capRounded: true, jointRounded: true, updateTriggers: { getColor: [theme] } }),
+    rails: (id, data) => new deck.PathLayer({ id, data, getPath: d => d.c, getColor: d => c.rail, getWidth: d => d.w, widthUnits: "meters", widthMinPixels: 1.1,
+      capRounded: true, jointRounded: true, updateTriggers: { getColor: [theme] } }),
+    batiments: (id, data) => new deck.PolygonLayer({ id, data, getPolygon: d => d.p, extruded: true, getElevation: d => d.h,
       getFillColor: d => d.h_src === "defaut" ? c.bat_defaut : c.bat, updateTriggers: { getFillColor: [theme], getLineColor: [theme] },
       material: r ? r.material : { ambient: 0.55, diffuse: 0.6, shininess: 8, specularColor: [60, 64, 80] }, stroked: false,
       ...(r && r.fil ? { wireframe: true, getLineColor: r.fil, lineWidthMinPixels: 1 } : {}),
-      ...(r && r.translucide ? { parameters: { depthWriteEnabled: false } } : {}) }));
+      ...(r && r.translucide ? { parameters: { depthWriteEnabled: false } } : {}) }),
+  };
+  for (const [k, cell, etapes] of cellules) {
+    cell.lots.slice(0, etapes).forEach((lot, i) => L.push(fabrique[lot.t](lot.t + "-" + k + "-" + i, lot.donnees)));
   }
   return L;
 }
@@ -763,7 +787,7 @@ function creerDeck() {
       // glisser pour déplacer = l'utilisateur prend la main, on ne suit plus (le zoom à la molette déplace aussi un peu : il ne compte pas)
       if (i.isDragging && i.isPanning && !i.isZooming) { if (suivi) arreterSuivi(); vol = null; }
       else if (i.isDragging || i.isZooming || i.isRotating) vol = null;
-      if (i.isDragging || i.isZooming || i.isRotating) vitrineMain = true;
+      if (i.isDragging || i.isZooming || i.isRotating) { vitrineMain = true; dernierGeste = performance.now(); }
       appliquerVue(viewState); placerBulle();
       if (Math.round(zoom * 10) !== avantPas || (zoom >= 11.5) !== avantNoms || clesPretes().join() !== avantCles) afficher();
     },
