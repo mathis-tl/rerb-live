@@ -76,7 +76,7 @@ class TestModeleDezoome(unittest.TestCase):
 
 
 class TestModeleIcone(unittest.TestCase):
-    """Version icône : longueur vraie, rame élargie et rehaussée, disque dessous, peu de polygones."""
+    """Variante icône (gardée pour les maquettes, plus utilisée par la carte) : longueur vraie, rame élargie et rehaussée, disque dessous, peu de polygones."""
 
     def test_icone(self):
         code = """
@@ -125,3 +125,23 @@ class TestModeleParCaisse(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRameCompleteSimple(unittest.TestCase):
+    """La carte dessine la rame complète d'un seul bloc de loin (21/11) : les quatre caisses allégées, longueur vraie, centrée, sans disque ni pièce d'icône."""
+
+    def test_rame_complete_simple(self):
+        code = """
+        const M = require('./web/modele-z8100.js'); const r = M.construire({ simple: true }); let n = 0, nan = 0, mn = 1e9, mx = -1e9;
+        for (const p of r.pieces) { const v = p.maillage.positions.value; n += v.length / 3;
+          for (let i = 0; i < v.length; i += 3) { for (let k = 0; k < 3; k++) if (!Number.isFinite(v[i+k])) nan++; mn = Math.min(mn, v[i]); mx = Math.max(mx, v[i]); } }
+        console.log(JSON.stringify({ n, nan, l: mx - mn, centre: (mx + mn) / 2, pieces: r.pieces.map(p => p.nom) }));
+        """
+        r = json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, timeout=60, check=True,
+                                      cwd=str(Path(__file__).resolve().parent.parent)).stdout)
+        self.assertEqual(r["nan"], 0)
+        self.assertAlmostEqual(r["l"], 104.050, places=2)
+        self.assertLess(abs(r["centre"]), 0.5, "centrée sur la rame : la carte la pose sur la position du train")
+        self.assertLess(r["n"], 12000)
+        self.assertNotIn("disque", r["pieces"])
+        self.assertNotIn("bleu", r["pieces"])

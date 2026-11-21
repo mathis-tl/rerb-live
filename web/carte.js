@@ -93,19 +93,19 @@ function fusionnerPieces(pieces, couleurDe) {
 }
 // --- fin maillages
 
-// --- Modèles 3D, prêts à dessiner : { opaque, vitre, disque } par modèle (fusionnés une seule fois, au chargement).
-const PALETTE_ICONE = { bleu: [84, 100, 146], noir: [52, 56, 62], blanc: [208, 214, 222] };
+// --- Modèles 3D, prêts à dessiner : { opaque, vitre } par modèle (fusionnés une seule fois, au chargement).
 function preparerModele(modele, couleurDe) {
   const pieces = modele.pieces, de = nom => pieces.filter(p => p.nom === nom);
   return {
-    opaque: fusionnerPieces(pieces.filter(p => p.nom !== "vitre" && p.nom !== "disque"), couleurDe),
-    vitre: de("vitre")[0] || null, disque: de("disque")[0] || null,
+    opaque: fusionnerPieces(pieces.filter(p => p.nom !== "vitre"), couleurDe),
+    vitre: de("vitre")[0] || null,
   };
 }
 const MODELES = {
   motrice: preparerModele(ModeleZ8100.construire({ voiture: 0 }), p => p.couleur), remorque: preparerModele(ModeleZ8100.construire({ voiture: 1 }), p => p.couleur),
   motriceSimple: preparerModele(ModeleZ8100.construire({ voiture: 0, simple: true }), p => p.couleur), remorqueSimple: preparerModele(ModeleZ8100.construire({ voiture: 1, simple: true }), p => p.couleur),
-  icone: preparerModele(ModeleZ8100.construire({ icone: true }), p => PALETTE_ICONE[p.nom] || p.couleur),
+  // de loin (zoom < ZOOM_DETAIL) : la même rame, complète et d'un seul bloc, caisses allégées ; l'ancienne icône vue de dessus a été retirée (21/11)
+  rame: preparerModele(ModeleZ8100.construire({ simple: true }), p => p.couleur),
 };
 
 // --- échelle du train
@@ -115,17 +115,18 @@ const MODELES = {
 // agrandi aux zooms 12 à 14 était moins lisible que l'icône (page de comparaison). Mètres par pixel de deck.gl (tuiles de 512 px) à la latitude de la ligne (~48,8°).
 // Taille AGRANDIE de loin : pas à l'échelle.
 const ZOOM_DETAIL = 15, ZOOM_PLEIN = 16, CIBLE_RAME_PX = 40, CIBLE_LARGEUR_PX = 10;
-const LONGUEUR_RAME_M = 104.05, LARGEUR_ICONE_M = 4.2, LARGEUR_CAISSE_M = 2.798;
-// Palette de l'icône alignée sur le modèle détaillé (bandeau de vitres bleu-violet, bas de caisse sombre) pour que le passage au zoom 15 se voie peu.
+const LONGUEUR_RAME_M = 104.05, LARGEUR_CAISSE_M = 2.798, HAUTEUR_MAX_ECHELLE = 6;
 function echelleTrain(zoom) {
   const metresParPixel = 78271.517 * Math.cos(48.8 * Math.PI / 180) / Math.pow(2, zoom);
   const borne = (v, max) => Math.min(max, Math.max(1, v));
-  if (zoom >= ZOOM_PLEIN) return { detail: true, longueur: 1, largeur: 1 };
-  if (zoom >= ZOOM_DETAIL) {   // détaillé élargi, de façon continue (lissage de 0 à 1 entre les deux zooms)
-    const t = (ZOOM_PLEIN - zoom) / (ZOOM_PLEIN - ZOOM_DETAIL), lisse = t * t * (3 - 2 * t);
-    return { detail: true, longueur: 1, largeur: 1 + (borne(CIBLE_LARGEUR_PX * metresParPixel / LARGEUR_CAISSE_M, 120) - 1) * lisse };
+  if (zoom >= ZOOM_PLEIN) return { detail: true, longueur: 1, largeur: 1, hauteur: 1 };
+  const largeurVoulue = borne(CIBLE_LARGEUR_PX * metresParPixel / LARGEUR_CAISSE_M, 120);
+  if (zoom >= ZOOM_DETAIL) {   // caisses articulées, élargies de façon continue (lissage de 0 à 1 entre les deux zooms)
+    const t = (ZOOM_PLEIN - zoom) / (ZOOM_PLEIN - ZOOM_DETAIL), lisse = t * t * (3 - 2 * t), largeur = 1 + (largeurVoulue - 1) * lisse;
+    return { detail: true, longueur: 1, largeur, hauteur: Math.min(largeur, HAUTEUR_MAX_ECHELLE) };
   }
-  return { detail: false, longueur: borne(CIBLE_RAME_PX * metresParPixel / LONGUEUR_RAME_M, 60), largeur: borne(CIBLE_LARGEUR_PX * metresParPixel / LARGEUR_ICONE_M, 120) };
+  // dessous : la MÊME rame, complète et d'un seul bloc ; mêmes proportions qu'au zoom 15, agrandie pour rester lisible (la hauteur est plafonnée : pas de mur)
+  return { detail: false, longueur: borne(CIBLE_RAME_PX * metresParPixel / LONGUEUR_RAME_M, 60), largeur: largeurVoulue, hauteur: Math.min(largeurVoulue, HAUTEUR_MAX_ECHELLE) };
 }
 // --- fin échelle du train
 
@@ -552,7 +553,7 @@ function gelule(axe, r, pasDeg = 15) {
 
 // Axe, demi-largeur et demi-longueur (mètres) de l'emprise d'un train : le long de la voie de près (modèle détaillé), droit selon le cap de loin (icône rigide).
 function empriseTrain(t, ech) {
-  const demiLarg = ech.detail ? DEMI_LARGEUR_CAISSE_M * ech.largeur : LARGEUR_ICONE_M / 2 * ech.largeur;
+  const demiLarg = DEMI_LARGEUR_CAISSE_M * ech.largeur;
   const demi = Math.max(0, LONGUEUR_RAME_M / 2 * ech.longueur - demiLarg);
   const axeVoie = ech.detail ? (axeSurVoie(t.voie, t.lon, t.lat, demi) || axeSurVoie(voieDroite(t.lon, t.lat, t.cap), t.lon, t.lat, demi)) : null;
   const a = (t.cap || 0) * Math.PI / 180;
@@ -573,12 +574,10 @@ function calquesRames(p, ech, mpp, pulse, selectionnee) {
     id: "rames-halo", data: rames, getPosition: d => [d.t.lon, d.t.lat], radiusUnits: "meters", getRadius: 70, radiusMinPixels: 14,
     getFillColor: d => [...couleurTrain(d.t), Math.round(46 * d.t.alpha)], parameters: { depthWriteEnabled: false },
   }));
-  if (ech.detail) {
-    L.push(new deck.PolygonLayer({
-      id: "rames-socle", data: rames, getPolygon: d => gelule(d.axe, d.demiLarg + PX_ECART * mpp).map(q => [...lonLat(d.t, q), 0.15]),
-      getFillColor: d => [...couleurTrain(d.t), Math.round(110 * d.t.alpha)], stroked: false, parameters: { depthWriteEnabled: false },
-    }));
-  }
+  L.push(new deck.PolygonLayer({   // socle de la couleur de l'état, à tous les zooms (il remplace le disque de l'ancienne icône)
+    id: "rames-socle", data: rames, getPolygon: d => gelule(d.axe, d.demiLarg + PX_ECART * mpp).map(q => [...lonLat(d.t, q), ech.detail ? 0.15 : 0.2 * mpp]),
+    getFillColor: d => [...couleurTrain(d.t), Math.round(110 * d.t.alpha)], stroked: false, parameters: { depthWriteEnabled: false },
+  }));
   L.push(new deck.PathLayer({
     id: "rames-contour", data: traits, getPath: d => d.chemin, getColor: d => d.couleur, getWidth: d => d.largeur, widthUnits: "pixels", jointRounded: true, capRounded: true,
   }));
@@ -596,20 +595,15 @@ function calquesTrains(p, ech, couleurAlpha, fin) {
     const caisses = voitures(p);
     return [["motrice", d => d.rang === 0 || d.rang === 3], ["remorque", d => d.rang === 1 || d.rang === 2]].flatMap(([type, est]) => {
       const donnees = caisses.filter(est), m = MODELES[type + (fin ? "" : "Simple")];
-      const commun = { getOrientation: orientationVoiture, getScale: [1, ech.largeur, ech.largeur], updateTriggers: { getScale: [ech.largeur] } };
+      const commun = { getOrientation: orientationVoiture, getScale: [1, ech.largeur, ech.hauteur], updateTriggers: { getScale: [ech.largeur, ech.hauteur] } };
       const L = [calque(`trains-detail-${type}`, donnees, m.opaque, d => [255, 255, 255, Math.round(255 * d.alpha)], { ...commun, pickable: true })];
       if (fin && m.vitre) L.push(calque(`trains-detail-${type}-vitre`, donnees, m.vitre.maillage, d => [...m.vitre.couleur, Math.round(90 * d.alpha)], { ...commun, parameters: { depthWriteEnabled: false } }));
       return L;
     });
   }
-  const echelle = () => [ech.longueur, ech.largeur, ech.largeur];   // de loin : icône rigide, agrandie
-  const commun = { getOrientation: orientation, getScale: echelle, updateTriggers: { getScale: [ech.longueur, ech.largeur] } };
-  const m = MODELES.icone;
-  return [
-    calque("trains-icone-corps", p, m.opaque, d => [255, 255, 255, Math.round(255 * d.alpha)], { ...commun, pickable: true }),
-    ...(m.disque ? [calque("trains-icone-disque", p, m.disque.maillage, couleurAlpha, { ...commun, updateTriggers: { ...commun.updateTriggers, getColor: [] }, pickable: true })] : []),
-    ...(m.vitre ? [calque("trains-icone-vitre", p, m.vitre.maillage, d => [...m.vitre.couleur, Math.round(90 * d.alpha)], { ...commun, parameters: { depthWriteEnabled: false } })] : []),
-  ];
+  const echelle = [ech.longueur, ech.largeur, ech.hauteur];   // de loin : la rame complète d'un seul bloc, agrandie
+  const commun = { getOrientation: orientation, getScale: echelle, updateTriggers: { getScale: [ech.longueur, ech.largeur, ech.hauteur] } };
+  return [calque("trains-rame", p, MODELES.rame.opaque, d => [255, 255, 255, Math.round(255 * d.alpha)], { ...commun, pickable: true })];
 }
 
 function calques(maintenant = performance.now()) {

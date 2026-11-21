@@ -638,17 +638,23 @@ class TestCodeCarte(unittest.TestCase):
 
     def test_de_pres_modele_detaille_a_la_taille_reelle(self):
         for z in (16, 17, 17.5, 19):
-            self.assertEqual(self._echelle(z), {"detail": True, "longueur": 1, "largeur": 1}, f"zoom {z}")
+            self.assertEqual(self._echelle(z), {"detail": True, "longueur": 1, "largeur": 1, "hauteur": 1}, f"zoom {z}")
 
-    def test_de_loin_icone_agrandie(self):
+    def test_de_loin_la_meme_rame_agrandie_jamais_d_icone(self):
         e = self._echelle(9.6)     # toute la ligne : ~66 m par pixel
-        self.assertFalse(e["detail"], "au dézoom : icône, pas le modèle détaillé")
+        self.assertFalse(e["detail"], "au dézoom : la rame complète d'un seul bloc, pas les caisses articulées")
         self.assertGreater(e["longueur"], 10)
         self.assertGreater(e["largeur"], e["longueur"], "la rame est 25 fois plus longue que large : la largeur est agrandie davantage")
         self.assertLessEqual(e["longueur"], 60)
         self.assertLessEqual(e["largeur"], 120)
+        self.assertLessEqual(e["hauteur"], 6, "pas de mur : la hauteur est plafonnée")
+        self.assertGreaterEqual(e["hauteur"], 1)
 
-    def test_bascule_icone_detail_au_zoom_15(self):
+    def test_hauteur_vraie_de_pres(self):
+        for z in (16, 17.5, 19):
+            self.assertEqual(self._echelle(z)["hauteur"], 1, f"zoom {z}")
+
+    def test_bascule_caisses_articulees_rame_rigide_au_zoom_15(self):
         # seuil décidé le 18/11 (12 essayé : détaillé agrandi moins lisible que l'icône aux zooms 12 à 14)
         self.assertTrue(self._echelle(15)["detail"])
         self.assertFalse(self._echelle(14.9)["detail"])
@@ -660,9 +666,10 @@ class TestCodeCarte(unittest.TestCase):
         self.assertGreater(largeurs[-1], 4, "à 15, la caisse (2,8 m) mesure ~10 px de large")
         for z in (15.75, 15.5, 15):
             self.assertEqual(self._echelle(z)["longueur"], 1, "la longueur reste vraie : la rame fait déjà plus de 40 px")
-        # pas de saut à la bascule : la largeur apparente de l'icône juste dessous est du même ordre
-        icone = self._echelle(14.99)
-        self.assertLess(abs(icone["largeur"] * 4.2 - largeurs[-1] * 2.798) / (icone["largeur"] * 4.2), 0.05)
+        # pas de saut à la bascule : c'est le même modèle, à la même largeur, juste dessous
+        dessous = self._echelle(14.99)
+        self.assertLess(abs(dessous["largeur"] - largeurs[-1]) / dessous["largeur"], 0.02)
+        self.assertLess(abs(dessous["hauteur"] - self._echelle(15)["hauteur"]) / dessous["hauteur"], 0.02)
 
     def test_echelle_croissante_en_dezoomant(self):
         valeurs = [self._echelle(z)["longueur"] for z in (15, 13, 11, 9.6, 8)]
@@ -670,7 +677,8 @@ class TestCodeCarte(unittest.TestCase):
         self.assertGreater(valeurs[-1], valeurs[0])
 
     def test_les_deux_niveaux_du_modele_sont_charges_et_la_page_charge_le_modele_avant_la_carte(self):
-        self.assertIn("ModeleZ8100.construire({ icone: true })", self.js)
+        self.assertIn("ModeleZ8100.construire({ simple: true })", self.js, "la rame complète de loin")
+        self.assertNotIn("construire({ icone: true })", self.js, "l'icône vue de dessus ne revient jamais")
         html = (WEB / "index.html").read_text(encoding="utf-8")
         self.assertLess(html.index("modele-z8100.js"), html.index("carte.js"))
 
@@ -745,7 +753,7 @@ class TestCodeCarte(unittest.TestCase):
     def test_zoom_redessine_les_trains_et_legende(self):
         self.assertIn("pasZoom", self.js)
         html = (WEB / "index.html").read_text(encoding="utf-8")
-        self.assertIn("modèle de la Z 8100", html, "la légende dit ce qui change au zoom")
+        self.assertIn("agrandi de loin", html, "la légende dit ce qui change au zoom")
         self.assertIn('id="direction-changer"', html, "la direction se change par le bouton du haut (plus de boutons radio dans un panneau)")
 
     def _interp(self, expression):
@@ -944,9 +952,17 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("COULEUR_SELECTION = [168, 85, 247]", self.js)
         self.assertIn("PathLayer", self.js)
 
-    def test_palette_de_l_icone_alignee_sur_le_detaille(self):
-        self.assertIn("PALETTE_ICONE = { bleu: [84, 100, 146], noir: [52, 56, 62], blanc: [208, 214, 222] }", self.js)
-        self.assertIn("p => PALETTE_ICONE[p.nom] || p.couleur", self.js)
+    def test_plus_aucune_icone_dans_la_carte(self):
+        for mort in ("trains-icone", "PALETTE_ICONE", "LARGEUR_ICONE_M", "MODELES.icone", "icone: true"):
+            self.assertNotIn(mort, self.js, mort)
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn("pastille icone", html)
+        self.assertNotIn("Icône", html)
+
+    def test_socle_d_etat_dessine_a_tous_les_zooms(self):
+        corps = self.js.split("function calquesRames(")[1].split("\n}\n")[0]
+        avant = corps.split('id: "rames-socle"')[0][-90:]
+        self.assertNotIn("ech.detail", avant, "le socle remplace le disque de l'ancienne icône : il est là de loin aussi")
 
     # --- rame articulée : chaque caisse sur la voie
 
@@ -1007,11 +1023,12 @@ class TestCodeCarte(unittest.TestCase):
         o = self._voitures("[0, 1, 2, 3].map(rang => orientationVoiture({ cap: 90, rang }))")
         self.assertEqual([x[1] % 360 for x in o], [0, 0, 180, 180])
 
-    def test_la_carte_utilise_les_caisses_de_pres_et_l_icone_de_loin(self):
+    def test_la_carte_utilise_les_caisses_de_pres_et_la_rame_complete_de_loin(self):
         corps = self.js.split("function calquesTrains(")[1].split("function calques(")[0]
         self.assertIn("voitures(p)", corps)
         self.assertIn("getOrientation: orientationVoiture", corps)
-        self.assertIn("MODELES.icone", corps)
+        self.assertIn("MODELES.rame", corps)
+        self.assertIn('"trains-rame"', corps)
         self.assertIn("t.voie", self.js.split("function majAffiches")[1].split("function placesAffiches")[0], "la voie est gardée entre deux relevés")
 
     def _noms(self, expression):
@@ -1195,7 +1212,7 @@ class TestTableauRendu(unittest.TestCase):
         for bouton in ("vue-reinit", "vue-dessus", "vue-cote", "vue-bout", "vue-tourner", "sync"):
             self.assertIn(f'id="{bouton}"', self.html)
 
-    def test_detaille_des_le_zoom_15_et_icone_en_dessous(self):
+    def test_articule_des_le_zoom_15_et_rame_rigide_en_dessous(self):
         # 18/11 : seuil à 15 décidé par Mathis (12 essayé : détaillé agrandi moins lisible que l'icône) ; l'icône (palette alignée) ne sert qu'en dessous
         self.assertRegex(self.js, r"const ZOOM_DETAIL = 15,")
         self.assertIn("ZOOM_PLEIN = 16", self.js)
