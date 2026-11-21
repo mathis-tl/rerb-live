@@ -93,6 +93,25 @@ class TestCodeCarte(unittest.TestCase):
                                 capture_output=True, text=True, timeout=30, check=True).stdout
         return json.loads(sortie)
 
+    # --- tirets longs interdits sur le site (docs/anti-slop-design.md)
+    def test_aucun_tiret_long_dans_le_site(self):
+        for f in ("index.html", "carte.js", "carte.css", "modele-z8100.js"):
+            texte = (WEB / f).read_text(encoding="utf-8")
+            for car, nom in (("\u2013", "demi-cadratin"), ("\u2014", "cadratin"), ("\u2212", "signe moins")):
+                self.assertNotIn(car, texte, f"{f} : {nom} interdit (utiliser le tiret simple)")
+
+    def test_sans_tiret_long_nettoie_les_donnees_venues_de_prim(self):
+        f = lambda s: self._node("// --- texte", "// --- fin texte", f"sansTiretLong({json.dumps(s)})")
+        self.assertEqual(f("Châtelet \u2013 Les Halles"), "Châtelet - Les Halles")
+        self.assertEqual(f("a\u2014b\u2212c"), "a-b-c")
+        self.assertEqual(f("Massy-Palaiseau"), "Massy-Palaiseau")
+        self.assertEqual(f(None), "")
+
+    def test_les_donnees_affichees_passent_par_sansTiretLong(self):
+        self.assertIn("sansTiretLong(x)", self.js.split("const esc =")[1].split("\n")[0])
+        self.assertIn("sansTiretLong(texte)", self.js.split("function noeud")[1].split("\n")[0])
+        self.assertIn("geo.gares.forEach", self.js)
+
     # --- chargement, pause de l'onglet caché, erreurs
     def _chargement(self, expression):
         return self._node("// --- chargement", "// --- fin chargement", expression)

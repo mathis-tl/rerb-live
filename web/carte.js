@@ -741,11 +741,16 @@ function boiteLigne() {
   return { longitude: (x0 + x1) / 2, latitude: (y0 + y1) / 2, zoom: 9.6, pitch: 0, bearing: 0 };
 }
 
+// --- texte
+// Aucun tiret long sur le site (docs/anti-slop-design.md) : les noms et destinations venus de PRIM sont nettoyés avant affichage.
+function sansTiretLong(s) { return s == null ? "" : String(s).replace(/[\u2013\u2014\u2212]/g, "-"); }
+// --- fin texte
+
 // --- Panneau
 const $ = id => document.getElementById(id);
 // Toute donnée venue de PRIM (références de course, gares, motifs) est échappée avant d'entrer dans du HTML.
-const esc = x => String(x == null ? "" : x).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-function minutes(s) { return s == null ? "inconnu" : (s >= 0 ? "+" : "−") + Math.round(Math.abs(s) / 60) + " min"; }
+const esc = x => sansTiretLong(x).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function minutes(s) { return s == null ? "inconnu" : (s >= 0 ? "+" : "-") + Math.round(Math.abs(s) / 60) + " min"; }
 
 function ligneGroupe(m) {   // un train d'un groupe de la bulle ; toute donnée PRIM passe par esc()
   return '<div class="special"><b>' + esc(m.etat) + esc(suffixeEtiquettes(m)) + "</b> : " + esc(m.gare || "?")
@@ -753,7 +758,7 @@ function ligneGroupe(m) {   // un train d'un groupe de la bulle ; toute donnée 
 }
 
 function corpsTrain(t) {   // toute donnée PRIM passe par esc()
-  return `<b>${esc(t.etat)}${esc(suffixeEtiquettes(t))}</b>${etiquettes(t).map(e => `<br><span class="note"><b>${e.libelle}</b> : ${e.note}</span>`).join("")}<br>Gare : ${esc(t.gare || "—")}${t.gare_suivante ? "<br>Prochaine gare : " + esc(t.gare_suivante) : ""}`
+  return `<b>${esc(t.etat)}${esc(suffixeEtiquettes(t))}</b>${etiquettes(t).map(e => `<br><span class="note"><b>${e.libelle}</b> : ${e.note}</span>`).join("")}<br>Gare : ${esc(t.gare || "inconnue")}${t.gare_suivante ? "<br>Prochaine gare : " + esc(t.gare_suivante) : ""}`
     + `<br>Retard : ${minutes(t.retard_s)}<br>Mise à jour du train il y a ${t.age_s == null ? "?" : Math.round(t.age_s / 60)} min`
     + (t.horaires_incoherents ? `<br><b class="retard">⚠ ${esc(t.motif_vitesse)}</b>` : "")
     + (t.reconstruit ? "<br><i>heures reconstruites (gare retirée par PRIM)</i>" : "") + `<br><span class="note">${esc(t.course)}</span>`;
@@ -801,7 +806,7 @@ function panneau() {
 // --- Prochains trains à la gare choisie (stop-monitoring, via /gare : cache 60 s côté serveur)
 const heureParis = iso => new Intl.DateTimeFormat("fr-FR", { timeZone: "Europe/Paris", hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
 function ecrire(el, ...noeuds) { el.replaceChildren(...noeuds); }
-function noeud(tag, texte, classe) { const n = document.createElement(tag); if (texte != null) n.textContent = texte; if (classe) n.className = classe; return n; }
+function noeud(tag, texte, classe) { const n = document.createElement(tag); if (texte != null) n.textContent = sansTiretLong(texte); if (classe) n.className = classe; return n; }
 
 function afficherProchains() {
   const d = dernierePrevision, corps = $("prochains").tBodies[0], etat = $("etat-gare");
@@ -832,7 +837,7 @@ function afficherProchains() {
     tr.addEventListener("click", () => { if (trainAffiche(p.course)) { suivreTrain(p.course); return; } selection = p.course; detail_train(); majFiche(); afficherProchains(); afficher(); });
     return tr;
   });
-  if (!lignes.length) { const tr = noeud("tr"); tr.append(noeud("td", d.statut === "plafond" ? "—" : "Aucun passage à venir dans la réponse.")); lignes.push(tr); }
+  if (!lignes.length) { const tr = noeud("tr"); tr.append(noeud("td", d.statut === "plafond" ? "Indisponible pour le moment." : "Aucun passage à venir dans la réponse.")); lignes.push(tr); }
   ecrire(corps, ...lignes);
 }
 
@@ -970,6 +975,7 @@ async function demarrer() {
     const rg = await fetch("/geo");
     if (!rg.ok) throw new Error("HTTP " + rg.status);
     geo = await rg.json();
+    geo.gares.forEach(g => { g.nom = sansTiretLong(g.nom); });
   } catch (e) {
     const b = $("bandeau-erreur"); b.hidden = false;
     b.textContent = "Impossible de charger le tracé (" + e.message + "). Le serveur local tourne-t-il ? Recharge la page.";

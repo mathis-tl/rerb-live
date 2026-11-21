@@ -20,8 +20,8 @@
     <div id="bandeau-erreur" class="bandeau erreur" hidden></div>
   </div>
   <div id="commandes-carte">
-    <button id="zoom-plus" type="button" title="Zoom avant" aria-label="Zoom avant">+</button>
-    <button id="zoom-moins" type="button" title="Zoom arrière" aria-label="Zoom arrière">−</button>
+    <button id="zoom-plus" type="button" title="Zoom avant" aria-label="Zoom avant"><svg class="pictogramme" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.5v9M1.5 6h9"/></svg></button>
+    <button id="zoom-moins" type="button" title="Zoom arrière" aria-label="Zoom arrière"><svg class="pictogramme" viewBox="0 0 12 12" aria-hidden="true"><path d="M1.5 6h9"/></svg></button>
     <button id="boussole-carte" type="button" title="Boussole : clic = nord en haut ; glisser = tourner (côtés) et incliner (haut / bas)" aria-label="Boussole"><span class="aiguille">▲</span></button>
     <button id="incliner-carte" type="button" title="Basculer vue de dessus / vue inclinée">2D / 3D</button>
   </div>
@@ -103,7 +103,7 @@
   <div id="accueil" role="dialog" aria-labelledby="accueil-titre">
     <div class="carte-accueil">
       <h1 id="accueil-titre">RER B en direct</h1>
-      <p class="phrase">Où sont les trains du RER B ? Position estimée à partir des horaires PRIM, mise à jour toutes les 2 minutes — pas un GPS.</p>
+      <p class="phrase">Où sont les trains du RER B ? Position estimée à partir des horaires PRIM, mise à jour toutes les 2 minutes. Ce n'est pas un GPS.</p>
       <div id="chargement" role="status" aria-live="polite" data-type="attente">
         <div class="roue" aria-hidden="true"></div>
         <p id="chargement-message">Chargement des trains du RER B…</p>
