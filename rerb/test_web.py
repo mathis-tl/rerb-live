@@ -276,6 +276,30 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("left: 50%", regle)
         self.assertIn("translateX(-50%)", regle)
 
+    # --- légende : une entrée par ligne, explication courte en début de ligne, espace entre les entrées
+    def _legende(self):
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        return html.split('id="legende"')[1].split("</details>")[0]
+
+    def test_legende_une_entree_par_ligne_avec_explication_courte(self):
+        bloc = self._legende()
+        termes = re.findall(r"<dt[^>]*>(.*?)</dt>", bloc, re.S)
+        explications = re.findall(r"<dd[^>]*>(.*?)</dd>", bloc, re.S)
+        self.assertGreaterEqual(len(termes), 12, "tous les éléments de la carte sont expliqués")
+        self.assertEqual(len(termes), len(explications), "chaque terme a son explication")
+        for e in explications:
+            self.assertLessEqual(len(e.split()), 12, f"explication trop longue : {e}")
+            self.assertLessEqual(len(e), 90, e)
+            self.assertTrue(e.endswith("."), e)
+        self.assertNotIn('class="note"', bloc.split('id="source-decor"')[0], "plus de texte courant avec pastilles en ligne")
+
+    def test_legende_espacee_et_alignee_a_gauche(self):
+        css = self._css()
+        entree = re.search(r"\.legende-liste \.entree\s*\{([^}]*)\}", css).group(1)
+        self.assertGreaterEqual(float(re.search(r"margin-bottom:\s*(\d+)px", entree).group(1)), 8)
+        dd = re.search(r"\.legende-liste dd\s*\{([^}]*)\}", css).group(1)
+        self.assertRegex(dd, r"margin:\s*[^;]*0\s*;|margin-left:\s*0")
+
     # --- design de la version jour (docs/anti-slop-design.md)
     POLICES_LOCALES = {"Barlow", "Barlow Semi Condensed", "IBM Plex Mono", "IBM Plex Sans", "Public Sans", "Source Serif 4"}
     POLICES_BANNIES = ("system-ui", "-apple-system", "BlinkMacSystemFont", "Inter", "Roboto", "Poppins", "Space Grotesk", "DM Sans", "Arial", "Helvetica", "Segoe UI", "SF Pro")
@@ -480,7 +504,7 @@ class TestCodeCarte(unittest.TestCase):
     def test_zoom_redessine_les_trains_et_legende(self):
         self.assertIn("pasZoom", self.js)
         html = (WEB / "index.html").read_text(encoding="utf-8")
-        self.assertIn("agrandi", html)
+        self.assertIn("modèle de la Z 8100", html, "la légende dit ce qui change au zoom")
         self.assertIn('id="direction-changer"', html, "la direction se change par le bouton du haut (plus de boutons radio dans un panneau)")
 
     def _interp(self, expression):
@@ -814,15 +838,15 @@ class TestCodeCarte(unittest.TestCase):
     def test_donnees_anciennes_et_horaire_theorique_expliques(self):
         html = (WEB / "index.html").read_text(encoding="utf-8")
         self.assertIn("15 min", html)
-        self.assertIn("données anciennes", html)
-        self.assertIn("horaire théorique", html)
+        self.assertIn("données anciennes", html.lower())
+        self.assertIn("horaire théorique", html.lower())
         self.assertIn("pas de nouvelle information", self.js)
         self.assertIn("n'annonce aucun écart", self.js)
         # les notes ne prétendent pas plus que ce qu'on sait (décision du 18/11, piste A)
         self.assertIn("extrapolée à partir de la dernière estimation", self.js)
         self.assertNotIn("vient de l'horaire seul", self.js)
         self.assertIn("soit le train est à l'heure, soit PRIM ne suit pas ce train en temps réel", self.js)
-        self.assertIn("soit le train est à l'heure, soit PRIM ne suit pas ce train en temps réel", html)
+        self.assertIn("soit à l'heure, soit non suivi en direct par prim", html.lower())
 
     def test_le_mot_perime_a_disparu_de_la_page(self):
         # le mot était trompeur (décision du 18/11) ; le champ JSON `perime` reste servi un temps, mais la page ne le lit plus
@@ -860,7 +884,7 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("updateTriggers", self.js)
         html = (WEB / "index.html").read_text(encoding="utf-8")
         self.assertIn('id="legende-hauteurs"', html)
-        self.assertIn("hauteur par défaut", html)
+        self.assertIn("Hauteur par défaut", html)
 
     def test_reponse_de_gare_perimee_jetee(self):
         self.assertIn("demandee !== gareChoisie", self.js)

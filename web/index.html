@@ -49,20 +49,32 @@
     <details id="d-legende">
       <summary>Légende</summary>
       <div class="corps" id="legende">
-        <b>Position estimée, pas GPS</b>
-        <span id="source-decor" class="note" hidden></span>
-        <span class="note">de loin (zoom &lt; 15) : icône du train agrandie (pas à l'échelle) ; de près : modèle détaillé de la Z 8100 ; bulle « n » = n trains proches, cliquer pour la liste</span>
-        <span class="pastille" style="background:#2f855a"></span>à quai
-        <span class="pastille" style="background:#2b6cb0"></span>en route
-        <span class="note">contour autour de la rame (plusieurs états : contours emboîtés) :</span>
-        <span class="pastille contour" style="border-color:#ff3c4b"></span>au terminus (60 s avant de disparaître ; le trait pulse)
-        <span class="pastille contour" style="border-color:#facc15"></span>train retenu en pleine voie (PRIM a repoussé son arrivée de plus de 2 min : il attend avant la gare ; le trait pulse)
-        <span class="pastille contour" style="border-color:#a855f7"></span>train sélectionné
-        <span class="pastille contour" style="border-color:#ec4899"></span>données anciennes (pas de nouvelle information de PRIM depuis 15 min ; position extrapolée de la dernière estimation)
-        <span class="note">« horaire théorique » : l'heure affichée est celle de l'horaire, PRIM n'annonce aucun écart : soit le train est à l'heure, soit PRIM ne suit pas ce train en temps réel (indicatif, sans couleur)</span>
-        <span class="pastille zone"></span>trait = erreur supposée le long de la voie
-        <span id="legende-hauteurs" class="note"><span class="pastille carre bat-mesure"></span>hauteur connue (OSM ou IGN BD TOPO : hauteur, ou étages × 3 m)
-          <span class="pastille carre bat-defaut"></span>hauteur par défaut (9 m), non connue</span>
+        <p class="legende-titre"><b>Position estimée, pas GPS</b></p>
+        <h2>Trains</h2>
+        <dl class="legende-liste">
+        <div class="entree"><dt><span class="pastille " style="background:#2f855a"></span>À quai</dt><dd>Arrêté en gare.</dd></div>
+        <div class="entree"><dt><span class="pastille " style="background:#2b6cb0"></span>En route</dt><dd>Entre deux gares.</dd></div>
+        <div class="entree"><dt><span class="pastille icone"></span>Icône ou modèle</dt><dd>De loin une icône, de près le modèle de la Z 8100.</dd></div>
+        <div class="entree"><dt><span class="pastille bulle">3</span>Bulle numérotée</dt><dd>Plusieurs trains proches : cliquer pour la liste.</dd></div>
+        </dl>
+        <h2>Contour autour du train</h2>
+        <dl class="legende-liste">
+        <div class="entree"><dt><span class="pastille contour" style="border-color:#ff3c4b"></span>Terminus</dt><dd>Arrivé, disparaît dans 60 s.</dd></div>
+        <div class="entree"><dt><span class="pastille contour" style="border-color:#facc15"></span>Retenu en voie</dt><dd>PRIM repousse son arrivée de plus de 2 min.</dd></div>
+        <div class="entree"><dt><span class="pastille contour" style="border-color:#a855f7"></span>Sélectionné</dt><dd>Le train choisi.</dd></div>
+        <div class="entree"><dt><span class="pastille contour" style="border-color:#ec4899"></span>Données anciennes</dt><dd>Aucune nouvelle de PRIM depuis 15 min.</dd></div>
+        </dl>
+        <h2>Position</h2>
+        <dl class="legende-liste">
+        <div class="entree"><dt><span class="pastille zone"></span>Trait le long de la voie</dt><dd>Erreur possible sur la position.</dd></div>
+        <div class="entree"><dt><span class="pastille horaire"></span>Horaire théorique</dt><dd>Soit à l'heure, soit non suivi en direct par PRIM.</dd></div>
+        </dl>
+        <h2>Bâtiments</h2>
+        <dl class="legende-liste" id="legende-hauteurs">
+        <div class="entree"><dt><span class="pastille carre bat-mesure"></span>Hauteur connue</dt><dd>Relevée par OSM ou l'IGN.</dd></div>
+        <div class="entree"><dt><span class="pastille carre bat-defaut"></span>Hauteur par défaut</dt><dd>Supposée à 9 m.</dd></div>
+        </dl>
+        <p id="source-decor" class="note" hidden></p>
       </div>
     </details>
     <details id="d-options">
