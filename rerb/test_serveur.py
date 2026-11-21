@@ -452,6 +452,17 @@ class TestEtiquettes(unittest.TestCase):
         r3 = releve_de(course("T1", [appel(A, 0, 60), appel(B, 3010, 3070, vise_arr=3010, vise_dep=3070)]), recu=700)
         self.assertFalse(self.trains(r3, 700, l)["horaire_theorique"])
 
+    def test_retenu_est_servi_quand_prim_repousse_l_arrivee_de_plus_de_120_s(self):
+        l = Lisseur(tolerance_s=15.0, biais_s=0.0)
+        self.trains(releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]), recu=100), 100, l)
+        r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 520, 580, vise_arr=300, vise_dep=360)]), recu=110)
+        self.assertFalse(self.trains(r, 110, l)["retenu"])          # la révision vient d'arriver : le train roule encore à sa vitesse
+        arrete = self.trains(r, 400, l)
+        self.assertEqual((arrete["etat"], arrete["retenu"]), ("en route", True))
+        self.assertFalse(self.trains(r, 530, l)["retenu"])          # arrivé à la nouvelle heure
+        sans = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]), recu=0)
+        self.assertFalse(self.trains(sans, 200)["retenu"])
+
     def test_pas_d_etiquette_sur_un_releve_fige(self):
         # PRIM tombe : le même relevé (recu = 0) est servi pendant 700 s ; aucune étiquette « Horaire théorique »
         r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 3000, 3060)]), recu=0)

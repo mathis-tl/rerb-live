@@ -9,6 +9,8 @@ Règle : pour chaque (course, gare), on garde en mémoire l'arrivée « adoptée
   (la durée d'un tronçon varie alors de 20 % au plus : pas de saut de position).
 • Le décalage (adoptée - PRIM) s'applique à l'arrivée ET au départ du passage.
 • Un passage dont l'arrivée adoptée est dépassée (le train est arrivé) est figé : sinon le départ, donc la position, sauterait.
+• Révision vers plus tard de plus de RETENUE_S (120 s) alors que le train roule : « retenue » (décision du 21/11). L'arrivée adoptée suit PRIM tout de suite ; le passage
+  porte retenu_depuis (ancienne arrivée adoptée) et retenu_le (instant de la révision), et position.estimer arrête le train en pleine voie avant la gare.
 • Garde-fou : le lissage ne doit jamais rendre un train « non placé » (arrivée avant le départ précédent) ; on repousse alors l'heure.
 
 Le Lisseur est la seule mémoire du serveur sur les relevés passés. Il retient aussi, par course, si PRIM a déjà modifié une heure
@@ -22,11 +24,14 @@ from position import depart_effectif
 
 TOLERANCE_S = 15.0   # écart entre l'arrivée adoptée et l'heure PRIM en dessous duquel on ne change rien (Mathis, 18/11 : 30 s, puis 15 s après le rejeu : erreur de départ 54 s au lieu de 59 s)
 BIAIS_ARRIVEE_S = 10.0   # le train arrive en moyenne plus tard que l'heure estimée par PRIM (relevé de Palaiseau, 18/11 : 26 s, 12 trains) : on ajoute 10 s à chaque arrivée PRIM, valeur de départ décidée par Mathis, à réviser avec un 2e relevé
+RETENUE_S = 120.0    # révision PRIM vers plus tard de plus de 120 s (pendant que le train roule) : le train est retenu en pleine voie au lieu de ralentir (= ARRET_ANNONCE_MAX)
 RAMPE_MAX = 0.2      # secondes d'arrivée rattrapées par seconde écoulée : la vitesse du train varie de 20 % au plus
 
 
 class Lisseur:
-    def __init__(self, tolerance_s=TOLERANCE_S, rampe=RAMPE_MAX, biais_s=BIAIS_ARRIVEE_S):
+    def __init__(self, tolerance_s=TOLERANCE_S, rampe=RAMPE_MAX, biais_s=BIAIS_ARRIVEE_S, retenue_s=RETENUE_S):
+        self._retenue = timedelta(seconds=retenue_s)
+        self._retenues = {}   # (course, gare) -> (arrivée adoptée avant la révision, instant de la révision)
         self._tolerance = timedelta(seconds=tolerance_s)
         self._biais = timedelta(seconds=biais_s)
         self._rampe = rampe
@@ -40,6 +45,8 @@ class Lisseur:
         with self._verrou:
             for cle in [k for k in self._adoptees if k[0] not in presentes]:
                 del self._adoptees[cle]
+            for cle in [k for k in self._retenues if k[0] not in presentes]:
+                del self._retenues[cle]
             for ref in [r for r in self._courses if r not in presentes]:
                 del self._courses[ref]
 
@@ -84,6 +91,9 @@ class Lisseur:
                 decalage = self._adopter(ref, p.gare, p.arrivee + self._biais, maintenant) - p.arrivee   # la tolérance s'applique autour de l'heure biaisée
                 if decalage:
                     p = replace(p, arrivee=p.arrivee + decalage, depart=None if p.depart is None else p.depart + decalage)
+                retenue = self._retenues.get((ref, p.gare))
+                if retenue and p.arrivee > maintenant:
+                    p = replace(p, retenu_depuis=retenue[0], retenu_le=retenue[1])
                 nouveaux.append(p)
             if any(a is not b for a, b in zip(train.passages, nouveaux)):
                 nouveaux = self._garantir_coherence(train.passages, nouveaux)
@@ -100,7 +110,14 @@ class Lisseur:
         if adoptee > maintenant:   # le train n'est pas encore arrivé : l'adoptée peut encore bouger
             ecart = prim - adoptee
             pas = timedelta(seconds=self._rampe * max(0.0, (maintenant - derniere).total_seconds()))
-            if ecart > self._tolerance:
+            retenue = self._retenues.get((ref, gare))
+            if retenue:   # déjà retenu : le train est à l'arrêt, il suit PRIM (au-delà de la tolérance), sans jamais arriver avant l'ancienne heure
+                if abs(ecart) > self._tolerance:
+                    adoptee = max(prim, retenue[0])
+            elif ecart > self._retenue:
+                self._retenues[(ref, gare)] = (adoptee, maintenant)
+                adoptee = prim
+            elif ecart > self._tolerance:
                 adoptee = min(adoptee + pas, prim - self._tolerance)
             elif ecart < -self._tolerance:
                 adoptee = max(adoptee - pas, prim + self._tolerance)

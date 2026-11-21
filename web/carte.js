@@ -14,6 +14,7 @@ const INTERVALLE_MS = 3000;            // le serveur n'appelle PRIM qu'au plus t
 const COULEURS = { "à quai": [47, 133, 90], "en route": [43, 108, 176] };
 const ROUGE_TERMINUS = [226, 34, 48];   // train arrivé au terminus (séjour de 60 s avant de disparaître)
 const GRIS = [160, 167, 173];
+const JAUNE_RETENU = [250, 204, 21];   // train retenu en pleine voie (PRIM a repoussé son arrivée de plus de 120 s)
 const COULEUR_SELECTION = [168, 85, 247];   // contour du train sélectionné (violet : l'ambre de l'ancien anneau se confondait avec le jaune prévu pour « retenu »)
 const MASSY = { longitude: 2.2588, latitude: 48.7255 };
 
@@ -95,15 +96,17 @@ function suggestionsGares(gares, saisie, max = 8) {
 // --- fin recherche de gare
 
 // --- Couleur et orientation
-const couleurTrain = t => (t.donnees_anciennes ? GRIS : t.terminus ? ROUGE_TERMINUS : (COULEURS[t.etat] || GRIS));
+const couleurTrain = t => (t.donnees_anciennes ? GRIS : t.terminus ? ROUGE_TERMINUS : t.retenu ? JAUNE_RETENU : (COULEURS[t.etat] || GRIS));
 // --- etiquettes
 // Deux faits distincts, jamais confondus (l'ancien mot, trompeur, a été remplacé le 18/11) :
 //  • « Données anciennes » : PRIM n'a pas mis à jour ce train depuis plus de 15 min (certain) ; position extrapolée de la dernière estimation ; couleur grise ;
 //  • « Horaire théorique » : l'heure affichée est celle de l'horaire, PRIM n'annonce aucun écart (indicatif : un train à l'heure donne le même résultat) ; aucune couleur d'alerte.
 const NOTE_DONNEES_ANCIENNES = "pas de nouvelle information de PRIM sur ce train depuis plus de 15 min ; sa position est extrapolée à partir de la dernière estimation connue.";
+const NOTE_RETENU = "PRIM a repoussé l'arrivée de ce train à la prochaine gare de plus de 2 min : il attend en pleine voie, juste avant la gare, puis repart pour arriver à la nouvelle heure.";
 const NOTE_HORAIRE_THEORIQUE = "l'heure affichée est celle de l'horaire ; PRIM n'annonce aucun écart à la prochaine gare : soit le train est à l'heure, soit PRIM ne suit pas ce train en temps réel.";
 function etiquettes(t) {
   const liste = [];
+  if (t.retenu) liste.push({ libelle: "Retenu en voie", note: NOTE_RETENU });
   if (t.donnees_anciennes) liste.push({ libelle: "Données anciennes", note: NOTE_DONNEES_ANCIENNES });
   if (t.horaire_theorique) liste.push({ libelle: "Horaire théorique", note: NOTE_HORAIRE_THEORIQUE });
   return liste;
@@ -182,7 +185,7 @@ function animer() {
     const maintenant = performance.now();
     etapeCamera(maintenant);   // vol de caméra ou suivi d'un train
     afficher(maintenant);
-    if (vol || suivi || trains.some(t => t.terminus) || [...affiches.values()].some(e => maintenant - e.t0 < e.duree)) animation = requestAnimationFrame(pas);
+    if (vol || suivi || trains.some(t => t.terminus || t.retenu) || [...affiches.values()].some(e => maintenant - e.t0 < e.duree)) animation = requestAnimationFrame(pas);
   };
   animation = requestAnimationFrame(pas);
 }
@@ -375,9 +378,10 @@ const orientationVoiture = d => [0, 90 - d.cap + (d.rang >= 2 ? 180 : 0), 0];
 // anciennes) remplit la gélule : il remplace le disque de l'icône de loin. La gélule suit la voie (rame pliée en courbe).
 const PX_TRAIT = 2.4, PX_ECART = 3.5, PX_PULSE = 1.6, DEMI_LARGEUR_CAISSE_M = 1.45;
 const ROUGE_TERMINUS_VIF = [255, 60, 75];
-// États qui dessinent un contour, du plus important au moins important ; « retenu » (jaune, attente > 120 s) n'existe pas encore côté serveur.
+// États qui dessinent un contour, du plus important au moins important ; « retenu » = jaune, attente en voie après une révision PRIM de plus de 120 s.
 const contoursDeTrain = (t, selectionne) => [
   t.terminus && { couleur: ROUGE_TERMINUS_VIF, pulse: true },
+  t.retenu && { couleur: JAUNE_RETENU, pulse: true },
   selectionne && { couleur: COULEUR_SELECTION, pulse: false },
   t.donnees_anciennes && { couleur: GRIS, pulse: false },
 ].filter(Boolean);

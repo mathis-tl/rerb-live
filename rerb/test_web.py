@@ -311,7 +311,7 @@ class TestCodeCarte(unittest.TestCase):
     def test_train_au_terminus_rouge_avec_contour_qui_pulse(self):
         self.assertIn("t.terminus ? ROUGE_TERMINUS", self.js)
         self.assertNotIn('id: "terminus-halo"', self.js, "le halo circulaire est remplacé par le contour en gélule")
-        self.assertIn("trains.some(t => t.terminus)", self.js, "le contour pulse : l'animation continue tant qu'un train est au terminus")
+        self.assertIn("trains.some(t => t.terminus || t.retenu)", self.js, "le contour pulse : l'animation continue tant qu'un train est au terminus ou retenu")
 
     # --- contour en gélule autour de la rame (maquette validée le 18/11)
 
@@ -320,7 +320,7 @@ class TestCodeCarte(unittest.TestCase):
         if not shutil.which("node"):
             self.skipTest("node absent")
         bloc = lambda a, b: self.js.split(a)[1].split(b)[0]
-        constantes = " ".join(re.search(rf"const {n} = \[[^\]]*\];", self.js).group(0) for n in ("GRIS", "COULEUR_SELECTION"))
+        constantes = " ".join(re.search(rf"const {n} = \[[^\]]*\];", self.js).group(0) for n in ("GRIS", "JAUNE_RETENU", "COULEUR_SELECTION"))
         code = (constantes + bloc("// --- échelle du train", "// --- fin échelle du train") + bloc("// --- voitures", "// --- fin voitures")
                 + bloc("// --- contour", "// --- fin contour") + f"; console.log(JSON.stringify({expression}))")
         return json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, timeout=30, check=True).stdout)
@@ -331,6 +331,9 @@ class TestCodeCarte(unittest.TestCase):
         self.assertEqual(c({"horaire_theorique": True}, False), [])
         self.assertEqual(c({"terminus": True}, False), [[255, 60, 75]])
         self.assertEqual(c({"donnees_anciennes": True}, False), [[160, 167, 173]])
+        self.assertEqual(c({"retenu": True}, False), [[250, 204, 21]], "retenu en pleine voie : jaune, différent du violet de la sélection")
+        self.assertEqual(c({"terminus": True, "retenu": True, "donnees_anciennes": True}, True),
+                         [[255, 60, 75], [250, 204, 21], [168, 85, 247], [160, 167, 173]], "priorité : terminus > retenu > sélection > données anciennes")
         self.assertEqual(c({}, True), [[168, 85, 247]], "la sélection est violette (ni ambre ni jaune)")
         # cumul : le plus important au plus près de la rame
         self.assertEqual(c({"terminus": True, "donnees_anciennes": True}, True), [[255, 60, 75], [168, 85, 247], [160, 167, 173]])

@@ -35,6 +35,10 @@ GARES_DENSES = frozenset({"45102", "462394", "44877", "43833", "58774", "462398"
 # Au-delà, PRIM annonce une vraie retenue (régulation, incident) : on ne raccourcit pas. 120 s décidé par Mathis le 18/11 : les arrêts annoncés
 # du relevé du matin (849 arrêts, toute la ligne) vont jusqu'à 97 s, aucun au-dessus de 180 s ; à revoir avec des données d'un jour perturbé.
 ARRET_ANNONCE_MAX = timedelta(seconds=120)
+# Train « retenu » (décision du 21/11, idée de Mathis) : PRIM repousse l'arrivée de plus de RETENUE_MIN (voir lissage.py) alors que le train roule ;
+# il continue à sa vitesse jusqu'à ATTENTE_RETENUE_M avant la gare (ou là où il est déjà), y attend en pleine voie, puis repart pour arriver à l'heure PRIM.
+ATTENTE_RETENUE_M = 150.0
+FRACTION_ATTENTE_MAX = 0.98
 
 
 class DistanceInconnue(ValueError):
@@ -57,6 +61,8 @@ class Passage:
     annule: bool = False
     reconstruit: bool = False  # heures prises dans la mémoire (gare retirée par PRIM), voir memoire.py
     repare: bool = False       # heure ramenée en arrière pour rester cohérente avec la gare suivante
+    retenu_depuis: "datetime | None" = None   # arrivée adoptée AVANT la révision de plus de 120 s (le train arrivait alors à cette heure)
+    retenu_le: "datetime | None" = None       # instant où PRIM a repoussé l'arrivée (le train est alors retenu en pleine voie)
 
 
 @dataclass(frozen=True)
@@ -78,6 +84,7 @@ class Estimation:
     perime: bool = False
     reconstruit: bool = False          # une des gares utilisées vient de la mémoire
     repare: bool = False               # une des gares utilisées a une heure réparée
+    retenu: bool = False               # en route mais à l'arrêt en pleine voie : PRIM a repoussé l'arrivée de plus de 120 s
 
 
 def sejour_gare(gare):
@@ -114,6 +121,25 @@ def lire_train(ej):
 
 def _non_place(motif, perime):
     return Estimation(Etat.NON_PLACE, motif=motif, perime=perime)
+
+
+def _fraction_en_route(suivant, depart, arrivee_suiv, t, longueur):
+    """(fraction du tronçon parcourue, retenu ?) à l'instant t. Cas normal : linéaire entre le départ et l'arrivée. Train retenu (suivant.retenu_depuis) :
+    même vitesse qu'avant la révision jusqu'à la fraction d'attente (150 m avant la gare, ou la fraction déjà atteinte au moment de la révision),
+    arrêt, puis reprise à la même vitesse pour arriver à l'heure adoptée."""
+    ancienne, revision = suivant.retenu_depuis, suivant.retenu_le
+    if ancienne is None or revision is None or not depart < ancienne < arrivee_suiv:
+        return (t - depart) / (arrivee_suiv - depart), False
+    duree = ancienne - depart
+    f_att = max(0.5, 1 - ATTENTE_RETENUE_M / longueur) if longueur > 0 else 0.5
+    f_deja = min(max((revision - depart) / duree, 0.0), 1.0)
+    f_att = min(max(f_att, f_deja), FRACTION_ATTENTE_MAX)
+    arret, reprise = depart + f_att * duree, arrivee_suiv - (1 - f_att) * duree
+    if t < arret:
+        return (t - depart) / duree, False
+    if t < reprise:
+        return f_att, True
+    return f_att + (1 - f_att) * (t - reprise) / (arrivee_suiv - reprise), False
 
 
 def estimer(train, t, distance, seuil_perime=SEUIL_PERIME):
@@ -175,11 +201,11 @@ def estimer(train, t, distance, seuil_perime=SEUIL_PERIME):
                 longueur = distance(gare, suivante)
             except DistanceInconnue as erreur:
                 return _non_place(f"distance inconnue ({erreur})", perime)
-            f = (t - depart) / (arrivee_suiv - depart)
+            f, retenu = _fraction_en_route(ordre[i + 1], depart, arrivee_suiv, t, longueur)
             return Estimation(Etat.EN_ROUTE, gare=gare, gare_suivante=suivante,
                               fraction=f, distance_m=f * longueur, perime=perime,
                               longueur_m=longueur, duree_s=(arrivee_suiv - depart).total_seconds(),
-                              reconstruit=recon, repare=repare)
+                              reconstruit=recon, repare=repare, retenu=retenu)
     raise AssertionError("inatteignable : t est entre la 1re arrivée et le dernier départ")
 
 

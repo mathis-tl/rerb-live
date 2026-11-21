@@ -238,6 +238,7 @@ def calculer_trains(releve, maintenant, distance, localiser, nom_gare, duree_min
             "donnees_anciennes": e.perime,   # relevé de la course vieux de plus de 15 min (SEUIL_PERIME) ; remplace « périmé », mot trompeur
             "perime": e.perime,              # ancien nom, conservé un temps pour la compatibilité (la page ne le lit plus)
             "horaire_theorique": horaire_theorique,
+            "retenu": e.retenu,              # en route mais arrêté en pleine voie : PRIM a repoussé l'arrivée de plus de 120 s (décision du 21/11)
             "reconstruit": e.reconstruit, "repare": e.repare,
             "incertitude": _incertitude(train, maintenant, distance, localiser, duree_min) if lat is not None else None,
             "age_s": None if train.recorded_at is None else int((maintenant - train.recorded_at).total_seconds()),

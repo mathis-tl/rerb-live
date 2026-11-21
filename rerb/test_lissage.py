@@ -92,7 +92,7 @@ class TestLisseur(unittest.TestCase):
     def test_plusieurs_releves_successifs(self):
         l = lisseur()
         l.appliquer("C1", tr(3000), h(0))
-        l.appliquer("C1", tr(3200), h(50))                       # adoptée 3010 (vers 3170)
+        l.appliquer("C1", tr(3100), h(50))                       # adoptée 3010 (vers 3070) ; +100 s seulement : au-delà de 120 s le train serait retenu (TestRetenue)
         t = l.appliquer("C1", tr(2900), h(100))                  # PRIM change encore : zone [2870, 2930], on repart de 3010 vers 2930
         self.assertEqual(arrivee(t), h(3000))                    # 3010 - 0,2 x 50
         t = l.appliquer("C1", tr(2900), h(1000))
@@ -290,3 +290,90 @@ class TestReglagesLivres(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRetenue(unittest.TestCase):
+    """Décision du 21/11 (idée de Mathis, « pleine voie ») : PRIM repousse l'arrivée de plus de 120 s alors que le train roule -> le train
+    continue à sa vitesse jusqu'à ~150 m de la gare, y attend, puis repart pour arriver à la nouvelle heure PRIM. Voir position.estimer."""
+
+    def servi(self, ls, arr_b, maintenant):
+        return ls.appliquer("C1", train(arr_b, arr_z=arr_b + 400), h(maintenant))
+
+    def etat(self, t, s):
+        return estimer(t, h(s), distance)
+
+    def test_revision_de_plus_de_120_s_vers_plus_tard_retient_le_train(self):
+        ls = lisseur(tolerance_s=15.0)
+        self.servi(ls, 300, 100)
+        t = self.servi(ls, 520, 110)
+        self.assertEqual(arrivee(t), h(520), "l'arrivée adoptée suit PRIM tout de suite (le train attend, pas de ralentissement progressif)")
+        p = next(p for p in t.passages if p.gare == "B")
+        self.assertEqual((p.retenu_depuis, p.retenu_le), (h(300), h(110)))
+
+    def test_le_train_roule_a_sa_vitesse_puis_attend_en_voie_avant_la_gare(self):
+        ls = lisseur(tolerance_s=15.0)
+        self.servi(ls, 300, 100)
+        t = self.servi(ls, 520, 110)
+        e = self.etat(t, 200)
+        self.assertEqual(e.etat, Etat.EN_ROUTE)
+        self.assertAlmostEqual(e.fraction, 200 / 300, places=3, msg="même vitesse qu'avant la révision")
+        self.assertFalse(e.retenu)
+        for s in (270, 350, 440):
+            e = self.etat(t, s)
+            self.assertAlmostEqual(e.distance_m, 850.0, delta=0.5, msg="arrêté à 150 m de la gare")
+            self.assertTrue(e.retenu)
+
+    def test_il_repart_pour_arriver_a_la_nouvelle_heure_sans_saut(self):
+        ls = lisseur(tolerance_s=15.0)
+        self.servi(ls, 300, 100)
+        t = self.servi(ls, 520, 110)
+        precedent = None
+        for s in range(111, 521):
+            e = self.etat(t, s)
+            if e.etat == Etat.EN_ROUTE:
+                self.assertGreaterEqual(e.distance_m, precedent or 0, "le train ne recule jamais")
+                self.assertLess(e.distance_m - (precedent or e.distance_m), 40, "pas de saut")
+                precedent = e.distance_m
+        self.assertEqual(self.etat(t, 521).etat, Etat.A_QUAI)
+        self.assertFalse(self.etat(t, 521).retenu)
+
+    def test_revision_de_120_s_ou_moins_garde_la_rampe(self):
+        ls = lisseur(tolerance_s=15.0)
+        self.servi(ls, 300, 100)
+        t = self.servi(ls, 400, 110)
+        p = next(p for p in t.passages if p.gare == "B")
+        self.assertIsNone(p.retenu_depuis)
+        self.assertLess(arrivee(t), h(400), "rampe : 0,2 s par seconde")
+        self.assertFalse(self.etat(t, 290).retenu)
+
+    def test_revision_vers_plus_tot_ne_retient_pas(self):
+        ls = lisseur(tolerance_s=15.0)
+        self.servi(ls, 600, 100)
+        t = self.servi(ls, 300, 110)
+        self.assertIsNone(next(p for p in t.passages if p.gare == "B").retenu_depuis)
+
+    def test_train_deja_arrive_n_est_jamais_retenu(self):
+        ls = lisseur(tolerance_s=15.0)
+        self.servi(ls, 300, 100)
+        t = self.servi(ls, 700, 310)
+        self.assertIsNone(next(p for p in t.passages if p.gare == "B").retenu_depuis)
+
+    def test_la_retenue_est_conservee_aux_releves_suivants(self):
+        ls = lisseur(tolerance_s=15.0)
+        self.servi(ls, 300, 100)
+        self.servi(ls, 520, 110)
+        t = self.servi(ls, 520, 140)
+        p = next(p for p in t.passages if p.gare == "B")
+        self.assertEqual((p.retenu_depuis, p.retenu_le), (h(300), h(110)))
+        t = self.servi(ls, 530, 150)   # écart dans la tolérance : rien ne bouge
+        self.assertEqual(arrivee(t), h(520))
+
+    def test_revision_deja_depassee_au_moment_de_la_detection_arrete_le_train_la_ou_il_est(self):
+        ls = lisseur(tolerance_s=15.0)
+        self.servi(ls, 300, 100)
+        t = self.servi(ls, 600, 290)   # le train a déjà passé les 150 m d'avant la gare (fraction 0,97)
+        for s in (295, 400, 500):
+            e = self.etat(t, s)
+            self.assertGreaterEqual(e.distance_m, 850.0)
+            self.assertLess(e.distance_m, 1000.0)
+        self.assertTrue(self.etat(t, 400).retenu)
