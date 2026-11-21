@@ -258,7 +258,8 @@ class TestCodeCarte(unittest.TestCase):
             m = re.search(rf'<details id="{ident}"([^>]*)>', html)
             self.assertIsNotNone(m, ident)
             self.assertNotIn("open", m.group(1), f"{ident} doit être replié au départ")
-        self.assertEqual(html.count("Train choisi"), 1, "une seule fiche de train (plus de doublon dans un panneau)")
+        self.assertNotIn('id="fiche-train"', html, "plus de fiche en coin : la bulle est reliée au train")
+        self.assertNotIn('id="fiche-groupe"', html)
 
     def test_tous_les_identifiants_utilises_par_le_js_existent_dans_la_page(self):
         html = (WEB / "index.html").read_text(encoding="utf-8")
@@ -299,6 +300,68 @@ class TestCodeCarte(unittest.TestCase):
         self.assertGreaterEqual(float(re.search(r"margin-bottom:\s*(\d+)px", entree).group(1)), 8)
         dd = re.search(r"\.legende-liste dd\s*\{([^}]*)\}", css).group(1)
         self.assertRegex(dd, r"margin:\s*[^;]*0\s*;|margin-left:\s*0")
+
+    # --- bulle reliée au train sélectionné par un trait
+    def _bulle(self, expression):
+        return self._node("// --- bulle", "// --- fin bulle", expression)
+
+    CARTE = {"l": 1000, "h": 600}
+    TAILLE = {"l": 300, "h": 200}
+
+    def _place(self, point, zones=None, precedent=None, carte=None, taille=None):
+        return self._bulle(f"placementBulle({json.dumps(point)}, {json.dumps(taille or self.TAILLE)}, {json.dumps(carte or self.CARTE)}, "
+                           f"{json.dumps(zones or [])}, {json.dumps(precedent)})")
+
+    def test_bulle_en_haut_a_droite_du_train_par_defaut(self):
+        r = self._place({"x": 500, "y": 400})
+        self.assertEqual(r["coin"], "hd")
+        self.assertEqual((r["x"], r["y"]), (500 + 48, 400 - 48 - 200))
+        self.assertEqual((r["trait"]["x1"], r["trait"]["y1"]), (500, 400), "le trait part du train")
+        self.assertEqual((r["trait"]["x2"], r["trait"]["y2"]), (548, 352), "et arrive au coin le plus proche de la bulle")
+
+    def test_bulle_change_de_cote_pres_des_bords(self):
+        self.assertEqual(self._place({"x": 500, "y": 60})["coin"], "bd")
+        self.assertEqual(self._place({"x": 960, "y": 400})["coin"], "hg")
+        self.assertEqual(self._place({"x": 960, "y": 60})["coin"], "bg")
+
+    def test_bulle_toujours_dans_la_carte(self):
+        for point in ({"x": 5, "y": 5}, {"x": 995, "y": 595}, {"x": 500, "y": 300}, {"x": -50, "y": 700}):
+            r = self._place(point)
+            self.assertGreaterEqual(r["x"], 8); self.assertGreaterEqual(r["y"], 8)
+            self.assertLessEqual(r["x"] + 300, 1000 - 8); self.assertLessEqual(r["y"] + 200, 600 - 8)
+        petite = self._place({"x": 100, "y": 100}, carte={"l": 200, "h": 150})
+        self.assertEqual((petite["x"], petite["y"]), (8, 8), "carte trop petite : bulle calée dans le coin, sans sortir")
+
+    def test_bulle_evite_les_commandes(self):
+        zone = {"x0": 480, "y0": 150, "x1": 900, "y1": 380}   # recouvre le coin haut droite
+        self.assertNotEqual(self._place({"x": 500, "y": 400}, zones=[zone])["coin"], "hd")
+
+    def test_bulle_ne_saute_pas_d_un_coin_a_l_autre(self):
+        self.assertEqual(self._place({"x": 500, "y": 400}, precedent="hg")["coin"], "hg", "le coin précédent est gardé tant qu'il convient")
+        self.assertEqual(self._place({"x": 100, "y": 400}, precedent="hg")["coin"], "hd", "mais on change quand il ne convient plus")
+
+    def test_phrase_d_etat_en_une_ligne(self):
+        f = lambda t: self._bulle(f"phraseEtat({json.dumps(t)})")
+        self.assertEqual(f({"etat": "en route", "gare_suivante": "Antony"}), "En route vers Antony")
+        self.assertEqual(f({"etat": "à quai", "gare": "Massy-Palaiseau"}), "À quai à Massy-Palaiseau")
+        self.assertEqual(f({"etat": "à quai", "terminus": True, "gare": "Mitry-Claye"}), "Au terminus de Mitry-Claye, disparaît dans 60 s")
+        self.assertEqual(f({"etat": "en route", "retenu": True, "gare_suivante": "Châtelet"}), "Retenu en pleine voie avant Châtelet")
+        self.assertEqual(f({"etat": "en route"}), "En route")
+
+    def test_la_bulle_est_placee_a_chaque_image_et_a_chaque_deplacement(self):
+        self.assertIn("placerBulle()", self.js.split("function afficher(")[1].split("\n")[0])
+        self.assertIn("placerBulle()", self.js.split("onViewStateChange")[1].split("onClick")[0])
+
+    def test_le_trait_svg_se_cache_par_attribut_pas_par_la_propriete_hidden(self):
+        # un élément SVG n'a pas de propriété `hidden` : l'écrire ne retire pas l'attribut et le trait restait invisible
+        self.assertNotIn("trait.hidden", self.js)
+        self.assertNotIn('$("trait-bulle").hidden', self.js)
+        self.assertIn('toggleAttribute("hidden"', self.js)
+
+    def test_la_bulle_remplace_les_fiches_du_coin(self):
+        self.assertNotIn("fiche-train", self.js)
+        self.assertNotIn("fiche-groupe", self.js)
+        self.assertNotIn("fiche-corps", self.js)
 
     # --- design de la version jour (docs/anti-slop-design.md)
     POLICES_LOCALES = {"Barlow", "Barlow Semi Condensed", "IBM Plex Mono", "IBM Plex Sans", "Public Sans", "Source Serif 4"}
@@ -622,7 +685,7 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("suivreTrain(object.course)", corps)
         self.assertIn("pickable: true", self.js.split('id: "noms-gares"')[1].split("}));")[0], "le nom de la gare est cliquable")
         html = (WEB / "index.html").read_text(encoding="utf-8")
-        for ident in ("fiche-train", "fiche-corps", "fiche-suivi", "fiche-fermer"):
+        for ident in ("bulle", "trait-bulle", "bulle-corps", "fiche-suivi", "bulle-fermer", "bulle-zone"):
             self.assertIn(f'id="{ident}"', html, ident)
 
     def test_une_seule_direction_a_la_fois_avec_bouton_et_texte_sur_la_carte(self):
@@ -840,12 +903,12 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("15 min", html)
         self.assertIn("données anciennes", html.lower())
         self.assertIn("horaire théorique", html.lower())
-        self.assertIn("pas de nouvelle information", self.js)
+        self.assertIn("aucune nouvelle de PRIM depuis plus de 15 min", self.js)
         self.assertIn("n'annonce aucun écart", self.js)
         # les notes ne prétendent pas plus que ce qu'on sait (décision du 18/11, piste A)
-        self.assertIn("extrapolée à partir de la dernière estimation", self.js)
+        self.assertIn("extrapolée de la dernière estimation", self.js)
         self.assertNotIn("vient de l'horaire seul", self.js)
-        self.assertIn("soit le train est à l'heure, soit PRIM ne suit pas ce train en temps réel", self.js)
+        self.assertIn("à l'heure, ou non suivi en temps réel", self.js)
         self.assertIn("soit à l'heure, soit non suivi en direct par prim", html.lower())
 
     def test_le_mot_perime_a_disparu_de_la_page(self):
@@ -867,7 +930,7 @@ class TestCodeCarte(unittest.TestCase):
         (e,) = self._etiquettes({"horaire_theorique": True})
         self.assertEqual(e["libelle"], "Horaire théorique")
         self.assertIn("n'annonce aucun écart", e["note"])
-        self.assertIn("soit PRIM ne suit pas ce train en temps réel", e["note"])
+        self.assertIn("non suivi en temps réel", e["note"])
         deux = self._etiquettes({"donnees_anciennes": True, "horaire_theorique": True})
         self.assertEqual([x["libelle"] for x in deux], ["Données anciennes", "Horaire théorique"])
 

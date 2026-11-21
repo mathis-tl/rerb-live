@@ -25,15 +25,11 @@
     <button id="boussole-carte" type="button" title="Boussole : clic = nord en haut ; glisser = tourner (côtés) et incliner (haut / bas)" aria-label="Boussole"><svg class="aiguille" viewBox="0 0 16 16" aria-hidden="true"><path class="nord" d="M8 1.5 11.5 8h-7z"/><path class="sud" d="M8 14.5 4.5 8h7z"/></svg></button>
     <button id="incliner-carte" type="button" title="Basculer vue de dessus / vue inclinée">2D / 3D</button>
   </div>
-  <div id="fiche-train" hidden>
-    <h3>Train choisi</h3>
-    <div id="fiche-corps" class="note"></div>
-    <button id="fiche-suivi" type="button">Suivre ce train</button><button id="fiche-fermer" type="button">Fermer</button>
-  </div>
-  <div id="fiche-groupe" hidden>
-    <h3>Trains proches</h3>
-    <div id="detail" class="note"></div>
-    <button id="groupe-fermer" type="button">Fermer</button>
+  <svg id="trait-bulle" aria-hidden="true" hidden><line/><circle r="4"/></svg>
+  <div id="bulle" role="dialog" aria-labelledby="bulle-titre" hidden>
+    <div class="bulle-entete"><h3 id="bulle-titre"></h3><button id="bulle-fermer" type="button">Fermer</button></div>
+    <div id="bulle-corps"></div>
+    <div id="bulle-actions"><button id="fiche-suivi" type="button">Suivre ce train</button><button id="bulle-zone" type="button">Masquer la zone</button></div>
   </div>
   <div id="etat-donnees" role="status" aria-live="polite" hidden></div>
 

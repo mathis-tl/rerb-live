@@ -137,9 +137,9 @@ const couleurTrain = t => (t.donnees_anciennes ? ROSE_ANCIENNES : t.terminus ? R
 // Deux faits distincts, jamais confondus (l'ancien mot, trompeur, a été remplacé le 18/11) :
 //  • « Données anciennes » : PRIM n'a pas mis à jour ce train depuis plus de 15 min (certain) ; position extrapolée de la dernière estimation ; couleur rose (le gris se voyait trop peu, 21/11) ;
 //  • « Horaire théorique » : l'heure affichée est celle de l'horaire, PRIM n'annonce aucun écart (indicatif : un train à l'heure donne le même résultat) ; aucune couleur d'alerte.
-const NOTE_DONNEES_ANCIENNES = "pas de nouvelle information de PRIM sur ce train depuis plus de 15 min ; sa position est extrapolée à partir de la dernière estimation connue.";
-const NOTE_RETENU = "PRIM a repoussé l'arrivée de ce train à la prochaine gare de plus de 2 min : il attend en pleine voie, juste avant la gare, puis repart pour arriver à la nouvelle heure.";
-const NOTE_HORAIRE_THEORIQUE = "l'heure affichée est celle de l'horaire ; PRIM n'annonce aucun écart à la prochaine gare : soit le train est à l'heure, soit PRIM ne suit pas ce train en temps réel.";
+const NOTE_DONNEES_ANCIENNES = "aucune nouvelle de PRIM depuis plus de 15 min, position extrapolée de la dernière estimation.";
+const NOTE_RETENU = "PRIM a repoussé son arrivée de plus de 2 min : il attend en voie avant la gare.";
+const NOTE_HORAIRE_THEORIQUE = "heure de l'horaire, PRIM n'annonce aucun écart : à l'heure, ou non suivi en temps réel.";
 function etiquettes(t) {
   const liste = [];
   if (t.retenu) liste.push({ libelle: "Retenu en voie", note: NOTE_RETENU });
@@ -617,7 +617,7 @@ function calques(maintenant = performance.now()) {
 
 // --- Deck
 let deckgl = null;
-function afficher(maintenant = performance.now()) { if (deckgl) deckgl.setProps({ layers: calques(maintenant) }); }
+function afficher(maintenant = performance.now()) { if (deckgl) deckgl.setProps({ layers: calques(maintenant) }); placerBulle(); }
 
 // --- Vue : état piloté par nous (viewState contrôlé), pour que la caméra puisse suivre un train ou voler vers une gare sans combat avec deck.gl.
 // Déplacer = glisser (comme Google Maps / Google Earth). Tourner / incliner = clic droit ou Ctrl + glisser, deux doigts, glisser la boussole, ou boutons.
@@ -690,7 +690,7 @@ function suivreTrain(course) {
   if (!t) return;
   selection = course; suivi = course; groupeOuvert = null;
   voler(() => { const c = cibleSuivi() || { longitude: t.lon, latitude: t.lat }; return { ...c, zoom: Math.max(vueCarte.zoom, ZOOM_SUIVI), pitch: Math.max(vueCarte.pitch, 50), bearing: vueCarte.bearing }; }, 1100);
-  detail_train(); majFiche(); afficherProchains(); afficher();
+  majFiche(); afficherProchains(); afficher();
 }
 const ZOOM_SUIVI = 18, ZOOM_GARE = 17.2;
 function allerGare(g) {
@@ -698,7 +698,7 @@ function allerGare(g) {
   gareChoisie = g.ref; dernierePrevision = null; sequenceGare++;
   const choix = $("choix-gare"); if (choix) choix.value = g.ref;
   voler({ longitude: g.lon, latitude: g.lat, zoom: ZOOM_GARE, pitch: 60, bearing: vueCarte.bearing }, 1100);
-  detail_train(); majFiche(); afficherProchains(); actualiserGare(); afficher();
+  majFiche(); afficherProchains(); actualiserGare(); afficher();
 }
 // --- fin suivi
 
@@ -721,7 +721,7 @@ function creerDeck() {
       // glisser pour déplacer = l'utilisateur prend la main, on ne suit plus (le zoom à la molette déplace aussi un peu : il ne compte pas)
       if (i.isDragging && i.isPanning && !i.isZooming) { if (suivi) arreterSuivi(); vol = null; }
       else if (i.isDragging || i.isZooming || i.isRotating) vol = null;
-      appliquerVue(viewState);
+      appliquerVue(viewState); placerBulle();
       if (Math.round(zoom * 10) !== avantPas || (zoom >= 11.5) !== avantNoms || clesPretes().join() !== avantCles) afficher();
     },
     onClick: ({ object, layer }) => {
@@ -729,7 +729,7 @@ function creerDeck() {
       if (object && object.membres) { groupeOuvert = object.chef; selection = object.chef; suivi = null; }   // bulle : liste des trains du groupe
       else if (object && object.course) { suivreTrain(object.course); return; }                             // train : zoom, suivi et fiche
       else if (!object) { selection = null; groupeOuvert = null; if (suivi) arreterSuivi(); }
-      detail_train(); majFiche(); afficherProchains(); afficher();
+      majFiche(); afficherProchains(); afficher();
     },
   });
 }
@@ -760,6 +760,33 @@ const chargerPolices = () => Promise.race([
   Promise.all(["400 14px", "600 14px", "700 14px"].map(g => document.fonts.load(g + " " + policeCarte()))).catch(() => {}),
   new Promise(ok => setTimeout(ok, 2000))]);
 
+// --- bulle
+// Les données du train choisi s'affichent dans une bulle reliée au train par un trait. Placement pur (testable) : la bulle prend un coin
+// autour du train (haut droite, haut gauche, bas droite, bas gauche), reste dans la carte, évite les commandes, et garde son coin précédent
+// tant qu'il convient (sinon elle sauterait d'un côté à l'autre pendant que le train avance).
+const ECART_BULLE = 48, MARGE_BULLE = 8;
+function placementBulle(point, taille, carte, zones, precedent) {
+  const E = ECART_BULLE, M = MARGE_BULLE, { l, h } = taille;
+  const coins = { hd: { x: point.x + E, y: point.y - E - h }, hg: { x: point.x - E - l, y: point.y - E - h },
+                  bd: { x: point.x + E, y: point.y + E }, bg: { x: point.x - E - l, y: point.y + E } };
+  const dedans = c => c.x >= M && c.y >= M && c.x + l <= carte.l - M && c.y + h <= carte.h - M;
+  const libre = c => !(zones || []).some(z => c.x < z.x1 && c.x + l > z.x0 && c.y < z.y1 && c.y + h > z.y0);
+  const ordre = [precedent, "hd", "hg", "bd", "bg"].filter((c, i, a) => c && coins[c] && a.indexOf(c) === i);
+  const coin = ordre.find(c => dedans(coins[c]) && libre(coins[c])) || ordre.find(c => dedans(coins[c])) || ordre[0];
+  const x = Math.max(M, Math.min(coins[coin].x, carte.l - M - l)), y = Math.max(M, Math.min(coins[coin].y, carte.h - M - h));
+  const borne = (v, a, b) => Math.max(a, Math.min(v, b));
+  return { coin, x, y, trait: { x1: point.x, y1: point.y, x2: borne(point.x, x, x + l), y2: borne(point.y, y, y + h) } };
+}
+// État du train en une phrase (sans HTML : le texte est échappé à l'insertion).
+function phraseEtat(t) {
+  if (t.terminus) return "Au terminus" + (t.gare ? " de " + t.gare : "") + ", disparaît dans 60 s";
+  if (t.retenu) return "Retenu en pleine voie" + (t.gare_suivante ? " avant " + t.gare_suivante : "");
+  if (t.etat === "à quai") return "À quai" + (t.gare ? " à " + t.gare : "");
+  if (t.etat === "en route") return "En route" + (t.gare_suivante ? " vers " + t.gare_suivante : "");
+  return t.etat ? t.etat.charAt(0).toUpperCase() + t.etat.slice(1) : "État inconnu";
+}
+// --- fin bulle
+
 // --- Panneau
 const $ = id => document.getElementById(id);
 // Toute donnée venue de PRIM (références de course, gares, motifs) est échappée avant d'entrer dans du HTML.
@@ -772,26 +799,52 @@ function ligneGroupe(m) {   // un train d'un groupe de la bulle ; toute donnée 
 }
 
 function corpsTrain(t) {   // toute donnée PRIM passe par esc()
-  return `<b>${esc(t.etat)}${esc(suffixeEtiquettes(t))}</b>${etiquettes(t).map(e => `<br><span class="note"><b>${e.libelle}</b> : ${e.note}</span>`).join("")}<br>Gare : ${esc(t.gare || "inconnue")}${t.gare_suivante ? "<br>Prochaine gare : " + esc(t.gare_suivante) : ""}`
-    + `<br>Retard : ${minutes(t.retard_s)}<br>Mise à jour du train il y a ${t.age_s == null ? "?" : Math.round(t.age_s / 60)} min`
-    + (t.horaires_incoherents ? `<br><b class="retard">Attention : ${esc(t.motif_vitesse)}</b>` : "")
-    + (t.reconstruit ? "<br><i>heures reconstruites (gare retirée par PRIM)</i>" : "") + `<br><span class="note">${esc(t.course)}</span>`;
+  const ligne = (nom, valeur) => `<dt>${nom}</dt><dd>${valeur}</dd>`;
+  const age = t.age_s == null ? "inconnu" : "il y a " + Math.max(0, Math.round(t.age_s / 60)) + " min";
+  return `<p class="bulle-etat">${esc(phraseEtat(t))}</p><dl class="bulle-liste">`
+    + (t.gare_suivante && !t.retenu && t.etat === "à quai" ? ligne("Ensuite", esc(t.gare_suivante)) : "")
+    + ligne("Retard", esc(minutes(t.retard_s))) + ligne("Relevé", age) + ligne("Position", "±44 s, au pire ±117 s") + "</dl>"
+    + etiquettes(t).map(e => `<p class="bulle-avert"><b>${esc(e.libelle)}</b> ${esc(e.note)}</p>`).join("")
+    + (t.horaires_incoherents ? `<p class="bulle-avert"><b>Attention</b> ${esc(t.motif_vitesse)}</p>` : "")
+    + (t.reconstruit ? `<p class="bulle-avert">Heures reconstruites (gare retirée par PRIM).</p>` : "")
+    + `<p class="bulle-id">${esc(t.course)}</p>`;
 }
 
-function detail_train() {
-  const membres = groupeOuvert && groupes.get(groupeOuvert);
-  $("fiche-groupe").hidden = !membres;   // un seul train : sa fiche est sur la carte (#fiche-train) ; ici seulement la liste d'une bulle de trains proches
-  if (membres) $("detail").innerHTML = "<b>" + membres.length + " trains proches</b>" + membres.map(c => trains.find(x => x.course === c)).filter(Boolean).map(ligneGroupe).join("");
-}
-
-// Fiche flottante sur la carte : infos du train choisi, mises à jour à chaque relevé ; bouton pour suivre ou arrêter de suivre.
+// Bulle flottante : infos du train choisi (mises à jour à chaque relevé) ou liste d'une bulle de trains proches ; le trait et la position sont suivis à chaque image.
 function majFiche() {
-  const f = $("fiche-train"), t = trains.find(x => x.course === selection);
-  if (!f) return;
-  f.hidden = !t || !!groupeOuvert;
-  if (f.hidden) return;
-  $("fiche-corps").innerHTML = corpsTrain(t);
-  $("fiche-suivi").textContent = suivi === selection ? "Caméra sur le train : arrêter" : "Suivre ce train";
+  const b = $("bulle"), membres = groupeOuvert && groupes.get(groupeOuvert), t = !membres && trains.find(x => x.course === selection);
+  b.hidden = !membres && !t;
+  if (b.hidden) { $("trait-bulle").toggleAttribute("hidden", true); return; }
+  $("bulle-actions").hidden = !!membres;
+  if (membres) {
+    $("bulle-titre").textContent = membres.length + " trains proches";
+    $("bulle-corps").innerHTML = membres.map(c => trains.find(x => x.course === c)).filter(Boolean).map(ligneGroupe).join("");
+  } else {
+    $("bulle-titre").textContent = "Rame Z 8100";
+    $("bulle-corps").innerHTML = corpsTrain(t);
+    $("fiche-suivi").textContent = suivi === selection ? "Arrêter le suivi" : "Suivre ce train";
+    $("bulle-zone").textContent = mode === "train" ? "Afficher la zone" : "Masquer la zone";
+  }
+  placerBulle();
+}
+let coinBulle = null;
+function placerBulle() {
+  const b = $("bulle"), trait = $("trait-bulle");
+  const course = groupeOuvert || selection, t = !b.hidden && course && trainAffiche(course);
+  const vp = deckgl && deckgl.getViewports ? deckgl.getViewports()[0] : null;
+  if (!t || !vp) { trait.toggleAttribute("hidden", true); return; }
+  const [px, py] = vp.project([t.lon, t.lat, 3]);
+  const zc = $("carte").getBoundingClientRect();
+  const zones = ["barre-haut", "commandes-carte", "dock", "etat-donnees", "bandeaux"].map($).filter(e => e && e.getClientRects().length).map(e => {
+    const r = e.getBoundingClientRect(); return { x0: r.left - zc.left, y0: r.top - zc.top, x1: r.right - zc.left, y1: r.bottom - zc.top };
+  });
+  const p = placementBulle({ x: px, y: py }, { l: b.offsetWidth, h: b.offsetHeight }, { l: zc.width, h: zc.height }, zones, coinBulle);
+  coinBulle = p.coin;
+  b.style.left = Math.round(p.x) + "px"; b.style.top = Math.round(p.y) + "px";
+  trait.toggleAttribute("hidden", false);
+  const ligne = trait.querySelector("line"), point = trait.querySelector("circle");
+  ligne.setAttribute("x1", p.trait.x1); ligne.setAttribute("y1", p.trait.y1); ligne.setAttribute("x2", p.trait.x2); ligne.setAttribute("y2", p.trait.y2);
+  point.setAttribute("cx", p.trait.x1); point.setAttribute("cy", p.trait.y1);
 }
 
 function panneau() {
@@ -848,7 +901,7 @@ function afficherProchains() {
     else if (p.retard_s == null) droite.append(noeud("span", "retard ?", "note"));
     else droite.append(noeud("span", Math.abs(p.retard_s) < 60 ? "à l'heure" : "+" + Math.round(p.retard_s / 60) + " min", Math.abs(p.retard_s) < 60 ? "ponctuel" : "retard"));
     tr.append(droite);
-    tr.addEventListener("click", () => { if (trainAffiche(p.course)) { suivreTrain(p.course); return; } selection = p.course; detail_train(); majFiche(); afficherProchains(); afficher(); });
+    tr.addEventListener("click", () => { if (trainAffiche(p.course)) { suivreTrain(p.course); return; } selection = p.course; majFiche(); afficherProchains(); afficher(); });
     return tr;
   });
   if (!lignes.length) { const tr = noeud("tr"); tr.append(noeud("td", d.statut === "plafond" ? "Indisponible pour le moment." : "Aucun passage à venir dans la réponse.")); lignes.push(tr); }
@@ -895,7 +948,7 @@ async function actualiser() {
   }
   clearTimeout(minuteur);
   trainsEnCours = false; reessai = false; reveil = false; debutRequeteMs = null;
-  majChargement(); panneau(); detail_train(); majFiche(); afficherProchains(); afficher(); animer();
+  majChargement(); panneau(); majFiche(); afficherProchains(); afficher(); animer();
 }
 
 
@@ -981,7 +1034,7 @@ async function demarrer() {
   });
   const minuterieChargement = setInterval(() => { if (premiereReponse) clearInterval(minuterieChargement); majChargement(); }, 1000);
   document.querySelectorAll("input[name=mode]").forEach(i => i.addEventListener("change", () => {
-    mode = i.value; $("avertissement-train").hidden = mode !== "train"; afficher();
+    mode = i.value; $("avertissement-train").hidden = mode !== "train"; afficher(); majFiche();
   }));
   document.querySelectorAll("input[name=direction]").forEach(i => i.addEventListener("change", () => reglerDirection(i.value)));
   $("direction-changer").addEventListener("click", () => reglerDirection(DIRECTIONS[filtreDirection].autre));
@@ -1043,9 +1096,12 @@ async function demarrer() {
   $("zoom-moins").addEventListener("click", () => voler({ ...vueCarte, zoom: vueCarte.zoom - 1 }, 300));
   $("incliner-carte").addEventListener("click", () => voler({ ...vueCarte, pitch: vueCarte.pitch > 20 ? 0 : 60 }, 500));   // 2D / 3D
   $("fiche-suivi").addEventListener("click", () => { if (suivi === selection) arreterSuivi(); else suivreTrain(selection); });
-  const fermerFiches = () => { selection = null; groupeOuvert = null; arreterSuivi(); detail_train(); majFiche(); afficherProchains(); afficher(); };
-  $("fiche-fermer").addEventListener("click", fermerFiches);
-  $("groupe-fermer").addEventListener("click", fermerFiches);
+  const fermerFiches = () => { selection = null; groupeOuvert = null; arreterSuivi(); majFiche(); afficherProchains(); afficher(); };
+  $("bulle-fermer").addEventListener("click", fermerFiches);
+  $("bulle-zone").addEventListener("click", () => {   // masquer / afficher la zone d'incertitude autour du train (même réglage que les Options)
+    const radio = document.querySelector(`input[name=mode][value=${mode === "train" ? "mixte" : "train"}]`);
+    radio.checked = true; radio.dispatchEvent(new Event("change"));
+  });
   $("accueil-entrer").addEventListener("click", () => {
     accueilFerme = true;
     try { sessionStorage.setItem("accueil-vu", "1"); } catch (e) { /* tant pis : présentée à nouveau au prochain chargement */ }
