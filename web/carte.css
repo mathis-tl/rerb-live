@@ -120,7 +120,7 @@ select { font: inherit; width: 100%; padding: 7px 8px; margin-bottom: 6px; backg
 .pastille.carre { border-radius: 0; border: 1px solid #7b858e; }
 .pastille.bat-mesure { background: rgb(214, 214, 216); }
 .pastille.bat-defaut { background: rgb(222, 204, 176); }
-.pastille.rame { background: #2b6cb0; border-radius: 0; width: 16px; height: 8px; }
+.pastille.rame { background: #1e5af0; border-radius: 0; width: 16px; height: 8px; }
 .pastille.horaire { background: transparent; border: 2px dashed #2b6cb0; }
 .pastille.bulle { background: #15202b; color: #fff; font: 600 10px/12px var(--f-texte); text-align: center; }
 

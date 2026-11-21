@@ -59,7 +59,7 @@ function trainVitrine(liste, centre = CENTRE_VITRINE) {
 const capVitrine = cap => (((cap == null ? 0 : cap) + 35) % 360 + 360) % 360;   // 35° d'écart avec la marche du train : vue de trois quarts
 const vitrineActive = ({ ferme, sortie }) => !ferme && !sortie;
 // --- fin vitrine
-const COULEURS = { "à quai": [47, 133, 90], "en route": [43, 108, 176] };
+const COULEURS = { "à quai": [0, 140, 64], "en route": [30, 90, 240] };   // saturés (21/11) : le rose, plein, se voyait mieux que ces deux couleurs
 const ROUGE_TERMINUS = [226, 34, 48];   // train arrivé au terminus (séjour de 60 s avant de disparaître)
 const GRIS = [160, 167, 173];   // repli d'un état inconnu seulement
 const ROSE_ANCIENNES = [236, 72, 153];   // données anciennes : le gris se voyait trop peu (21/11)
@@ -533,6 +533,7 @@ const contoursDeTrain = (t, selectionne) => [
   t.retenu && { couleur: JAUNE_RETENU, pulse: true },
   selectionne && { couleur: COULEUR_SELECTION, pulse: false },
   t.donnees_anciennes && { couleur: ROSE_ANCIENNES, pulse: false },
+  COULEURS[t.etat] && { couleur: COULEURS[t.etat], pulse: false },   // l'état (à quai, en route) : toujours un contour plein, le moins important donc le plus loin de la rame
 ].filter(Boolean);
 
 // Contour fermé en mètres [x, y] autour de l'axe (queue -> tête) à la distance r : deux côtés parallèles et deux demi-cercles aux bouts.
@@ -576,7 +577,7 @@ function calquesRames(p, ech, mpp, pulse, selectionnee) {
   }));
   L.push(new deck.PolygonLayer({   // socle de la couleur de l'état, à tous les zooms (il remplace le disque de l'ancienne icône)
     id: "rames-socle", data: rames, getPolygon: d => gelule(d.axe, d.demiLarg + PX_ECART * mpp).map(q => [...lonLat(d.t, q), ech.detail ? 0.15 : 0.2 * mpp]),
-    getFillColor: d => [...couleurTrain(d.t), Math.round(110 * d.t.alpha)], stroked: false, parameters: { depthWriteEnabled: false },
+    getFillColor: d => [...couleurTrain(d.t), Math.round(170 * d.t.alpha)], stroked: false, parameters: { depthWriteEnabled: false },
   }));
   L.push(new deck.PathLayer({
     id: "rames-contour", data: traits, getPath: d => d.chemin, getColor: d => d.couleur, getWidth: d => d.largeur, widthUnits: "pixels", jointRounded: true, capRounded: true,

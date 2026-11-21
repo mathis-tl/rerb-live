@@ -896,6 +896,7 @@ class TestCodeCarte(unittest.TestCase):
             self.skipTest("node absent")
         bloc = lambda a, b: self.js.split(a)[1].split(b)[0]
         constantes = " ".join(re.search(rf"const {n} = \[[^\]]*\];", self.js).group(0) for n in ("ROSE_ANCIENNES", "JAUNE_RETENU", "COULEUR_SELECTION"))
+        constantes += " " + re.search(r"const COULEURS = \{[^}]*\};", self.js).group(0)
         code = (constantes + bloc("// --- échelle du train", "// --- fin échelle du train") + bloc("// --- voitures", "// --- fin voitures")
                 + bloc("// --- contour", "// --- fin contour") + f"; console.log(JSON.stringify({expression}))")
         return json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True, timeout=30, check=True).stdout)
@@ -914,6 +915,53 @@ class TestCodeCarte(unittest.TestCase):
         self.assertEqual(c({"terminus": True, "donnees_anciennes": True}, True), [[255, 60, 75], [168, 85, 247], [236, 72, 153]])
         self.assertTrue(self._contour('contoursDeTrain({terminus: true}, false)[0].pulse'))
         self.assertFalse(self._contour('contoursDeTrain({}, true)[0].pulse'))
+
+    # --- couleurs d'état lisibles (21/11) : le bleu (en route) et le vert (à quai) étaient un socle translucide, le rose un contour plein
+    def _couleurs_etat(self):
+        m = re.search(r'const COULEURS = \{ "à quai": \[(\d+), (\d+), (\d+)\], "en route": \[(\d+), (\d+), (\d+)\] \};', self.js)
+        v = [int(x) for x in m.groups()]
+        return {"à quai": v[:3], "en route": v[3:]}
+
+    @staticmethod
+    def _lum_rgb(c):
+        c = [x / 255 for x in c]
+        c = [x / 12.92 if x <= .03928 else ((x + .055) / 1.055) ** 2.4 for x in c]
+        return .2126 * c[0] + .7152 * c[1] + .0722 * c[2]
+
+    def test_l_etat_est_toujours_un_contour_plein_le_moins_important_donc_le_plus_loin(self):
+        c = lambda t, sel: [x["couleur"] for x in self._contour(f"contoursDeTrain({json.dumps(t)}, {json.dumps(sel)})")]
+        etats = self._couleurs_etat()
+        self.assertEqual(c({"etat": "en route"}, False), [etats["en route"]])
+        self.assertEqual(c({"etat": "à quai"}, False), [etats["à quai"]])
+        self.assertEqual(c({"etat": "à quai", "retenu": True}, False), [[250, 204, 21], etats["à quai"]], "retenu au plus près, l'état autour")
+        self.assertEqual(c({"etat": "en route"}, True), [[168, 85, 247], etats["en route"]])
+        self.assertFalse(self._contour('contoursDeTrain({ etat: "en route" }, false)[0].pulse'))
+
+    def test_vert_et_bleu_aussi_lisibles_que_le_rose(self):
+        fond = [223, 229, 227]   # fond du décor de jour (PALETTE.clair.fond)
+        for nom, c in self._couleurs_etat().items():
+            self.assertGreaterEqual((self._lum_rgb(fond) + .05) / (self._lum_rgb(c) + .05), 3.0, f"{nom} contre le fond : au moins 3:1 (élément graphique)")
+        rose = [236, 72, 153]
+        self.assertGreaterEqual((self._lum_rgb(fond) + .05) / (self._lum_rgb(rose) + .05), 3.0 - 0.3)
+
+    def test_etats_distincts_entre_eux_et_des_contours_exceptionnels(self):
+        autres = {"rose": [236, 72, 153], "violet": [168, 85, 247], "jaune": [250, 204, 21], "rouge": [255, 60, 75]}
+        etats = self._couleurs_etat()
+        dist = lambda a, b: sum((x - y) ** 2 for x, y in zip(a, b)) ** .5
+        self.assertGreater(dist(etats["à quai"], etats["en route"]), 120)
+        for ne, ce in etats.items():
+            for na, ca in autres.items():
+                self.assertGreater(dist(ce, ca), 100, f"{ne} / {na}")
+
+    def test_pastilles_de_la_legende_ont_la_couleur_des_etats(self):
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        for nom, c in self._couleurs_etat().items():
+            self.assertIn("background:#%02x%02x%02x" % tuple(c), html, f"pastille {nom}")
+
+    def test_socle_d_etat_plus_opaque(self):
+        corps = self.js.split("function calquesRames(")[1].split("\n}\n")[0]
+        alpha = int(re.search(r"Math\.round\((\d+) \* d\.t\.alpha\)", corps.split('id: "rames-socle"')[1]).group(1))
+        self.assertGreaterEqual(alpha, 160)
 
     def test_gelule_a_distance_constante_de_l_axe(self):
         # axe en arc de 150 m de rayon : chaque point du contour est à r de l'axe (côtés parallèles, bouts arrondis)

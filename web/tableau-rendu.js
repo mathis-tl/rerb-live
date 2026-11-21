@@ -3,7 +3,7 @@
 "use strict";
 
 // --- couleurs d'état (copie de web/carte.js ; un test vérifie qu'elles restent identiques)
-const COULEURS = { "à quai": [47, 133, 90], "en route": [43, 108, 176] };
+const COULEURS = { "à quai": [0, 140, 64], "en route": [30, 90, 240] };
 const GRIS = [160, 167, 173];
 const ROSE_ANCIENNES = [236, 72, 153];   // comme web/carte.js
 const ROUGE_TERMINUS = [226, 34, 48];
