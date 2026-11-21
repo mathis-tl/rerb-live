@@ -59,7 +59,7 @@ class TestCodeCarte(unittest.TestCase):
     def test_les_trains_dessines_sont_les_positions_animees(self):
         corps = self.js.split("function calques(")[1]
         self.assertIn("placesAffiches(maintenant)", corps)
-        self.assertEqual(self.js.count("placesAffiches("), 3, "définie une fois, utilisée dans calques() et pour retrouver un train à suivre")
+        self.assertEqual(self.js.count("placesAffiches("), 4, "définie une fois, utilisée dans calques(), pour retrouver un train à suivre et pour choisir le train de la vitrine")
 
     def test_aucune_donnee_prim_brute_dans_du_html(self):
         # toute valeur de train/gare insérée dans une chaîne HTML passe par esc()
@@ -363,6 +363,67 @@ class TestCodeCarte(unittest.TestCase):
         self.assertNotIn("fiche-groupe", self.js)
         self.assertNotIn("fiche-corps", self.js)
 
+    # --- arrivée en vitrine 3D : la caméra suit un train qui circule, sans incertitude, jusqu'au clic
+    def _vitrine(self, expression):
+        return self._node("// --- vitrine", "// --- fin vitrine", expression)
+
+    def test_vitrine_choisit_le_train_en_route_le_plus_proche_du_centre(self):
+        trains = [
+            {"course": "loin", "lat": 48.86, "lon": 2.35, "etat": "en route"},
+            {"course": "pres", "lat": 48.73, "lon": 2.27, "etat": "en route"},
+            {"course": "terminus", "lat": 48.7255, "lon": 2.2588, "etat": "à quai", "terminus": True},
+            {"course": "retenu", "lat": 48.7255, "lon": 2.2588, "etat": "en route", "retenu": True},
+            {"course": "ancien", "lat": 48.7255, "lon": 2.2588, "etat": "en route", "donnees_anciennes": True},
+            {"course": "sans-position", "lat": None, "lon": None, "etat": "en route"},
+        ]
+        self.assertEqual(self._vitrine(f"trainVitrine({json.dumps(trains)})"), "pres")
+
+    def test_vitrine_repli_et_liste_vide(self):
+        seul = [{"course": "T", "lat": 48.86, "lon": 2.35, "etat": "à quai", "terminus": True}]
+        self.assertEqual(self._vitrine(f"trainVitrine({json.dumps(seul)})"), "T", "à défaut, n'importe quel train placé")
+        self.assertIsNone(self._vitrine("trainVitrine([])"))
+        self.assertIsNone(self._vitrine('trainVitrine([{"course": "X", "lat": null, "lon": null}])'))
+
+    def test_vitrine_cap_de_la_camera_de_trois_quarts(self):
+        self.assertEqual(self._vitrine("capVitrine(350)"), 25)
+        self.assertEqual(self._vitrine("capVitrine(10)"), 45)
+        self.assertEqual(self._vitrine("capVitrine(null)"), 35)
+
+    def test_vitrine_seulement_a_la_premiere_visite_avant_le_clic(self):
+        f = lambda **k: self._vitrine("vitrineActive(%s)" % json.dumps({"vu": False, "ferme": False, "sortie": False, **k}))
+        self.assertTrue(f())
+        self.assertFalse(f(vu=True), "visite déjà faite dans la session")
+        self.assertFalse(f(ferme=True))
+        self.assertFalse(f(sortie=True), "dès que la carte part vers le haut, l'interface revient et l'incertitude aussi")
+
+    def test_vitrine_sans_incertitude_et_interface_masquee(self):
+        calques = self.js.split("function calques(")[1].split("\nfunction ")[0]
+        self.assertIn("const modeAffiche = vitrineEnCours() ? \"train\" : mode;", calques)
+        self.assertNotRegex(calques, r"\bmode (?:===|!==)", "le mode choisi n'est lu qu'à travers modeAffiche")
+        self.assertIn('classList.toggle("vitrine"', self.js)
+        css = self._css()
+        self.assertRegex(css, r"#carte\.vitrine #dock")
+        self.assertIn("#carte.vitrine #barre-haut", css)
+
+    def test_vitrine_la_camera_continue_de_suivre_apres_le_clic(self):
+        gestionnaire = self.js.split('$("accueil-entrer").addEventListener')[1].split("\n  });")[0]
+        self.assertIn("accueilSortie = true", gestionnaire)
+        self.assertNotIn("arreterSuivi", gestionnaire, "le clic ne coupe pas le suivi du train")
+        self.assertNotIn("voler(", gestionnaire)
+
+    def test_vitrine_la_carte_de_presentation_sort_vers_le_haut_sans_voile(self):
+        css = self._css()
+        regle = css.split("#accueil.sortie .carte-accueil")[1].split("}")[0]
+        self.assertIn("translateY(", regle)
+        self.assertIn("opacity: 0", regle)
+        self.assertIn("transition:", css.split(".carte-accueil {")[1].split("}")[0])
+        self.assertIn("prefers-reduced-motion", css)
+        self.assertIn("matchMedia(\"(prefers-reduced-motion: reduce)\")", self.js.split('$("accueil-entrer").addEventListener')[1][:900])
+
+    def test_vitrine_pas_de_vol_vers_toute_la_ligne_a_la_premiere_visite(self):
+        ouverture = self.js.split("// ouverture :")[1].split("chargerDecor();")[0]
+        self.assertIn("!vitrineEnCours()", ouverture)
+
     # --- design de la version jour (docs/anti-slop-design.md)
     POLICES_LOCALES = {"Barlow", "Barlow Semi Condensed", "IBM Plex Mono", "IBM Plex Sans", "Public Sans", "Source Serif 4"}
     POLICES_BANNIES = ("system-ui", "-apple-system", "BlinkMacSystemFont", "Inter", "Roboto", "Poppins", "Space Grotesk", "DM Sans", "Arial", "Helvetica", "Segoe UI", "SF Pro")
@@ -560,7 +621,7 @@ class TestCodeCarte(unittest.TestCase):
         corps = self.js.split("function calques(")[1]
         self.assertIn("getScale", self.js.split("function calquesTrains(")[1].split("function calques(")[0])
         self.assertNotIn("ZOOM_PASTILLE", self.js)
-        self.assertIn('mode === "zone"', corps.split('id: "pastilles"')[0][-120:])
+        self.assertIn('modeAffiche === "zone"', corps.split('id: "pastilles"')[0][-120:])
         self.assertIn('id: "bulles"', corps)
         self.assertIn("calquesTrains(", corps)
 

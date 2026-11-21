@@ -46,6 +46,21 @@ function etatAccueil({ vu, recu, ferme }) {
   return { afficher: true, compact: false, bouton: recu };
 }
 // --- fin accueil
+
+// --- vitrine
+// À la première visite, avant le clic, la caméra suit un train qui circule (la 3D est l'atout visuel du site) : de trois quarts, sans incertitude affichée.
+const CENTRE_VITRINE = { lon: 2.2588, lat: 48.7255 };   // Massy-Palaiseau : voie à l'air libre, décor le plus fin ; à Paris la ligne est en tunnel
+// Train à montrer : en route, bien suivi par PRIM, placé, le plus proche de Massy (voie visible, décor détaillé) ; à défaut, n'importe quel train placé.
+function trainVitrine(liste, centre = CENTRE_VITRINE) {
+  const places = (liste || []).filter(t => t.lat != null && t.lon != null);
+  const bons = places.filter(t => t.etat === "en route" && !t.terminus && !t.retenu && !t.donnees_anciennes);
+  const distance = t => Math.hypot((t.lon - centre.lon) * Math.cos(centre.lat * Math.PI / 180), t.lat - centre.lat);
+  const choix = (bons.length ? bons : places).slice().sort((a, b) => distance(a) - distance(b))[0];
+  return choix ? choix.course : null;
+}
+const capVitrine = cap => (((cap == null ? 0 : cap) + 35) % 360 + 360) % 360;   // 35° d'écart avec la marche du train : vue de trois quarts
+const vitrineActive = ({ vu, ferme, sortie }) => !vu && !ferme && !sortie;
+// --- fin vitrine
 const COULEURS = { "à quai": [47, 133, 90], "en route": [43, 108, 176] };
 const ROUGE_TERMINUS = [226, 34, 48];   // train arrivé au terminus (séjour de 60 s avant de disparaître)
 const GRIS = [160, 167, 173];   // repli d'un état inconnu seulement
@@ -279,7 +294,7 @@ function appliquerTheme() {
 // Chaque cellule a ses propres couches (identifiant par cellule) : une cellule qui arrive ne redessine QUE elle, les autres gardent leur
 // géométrie déjà calculée (avant : toutes les cellules étaient refondues en un seul jeu de données, tout était recalculé à chaque arrivée = saccades).
 // Sans index : repli sur le fichier unique de Massy. Sans aucun fichier : pas de décor, la carte reste sans fond.
-const ZOOM_DECOR = 12.5, CELLULES_MAX = 80, ZOOM_DEPART = 14;
+const ZOOM_DECOR = 12.5, CELLULES_MAX = 80, ZOOM_DEPART = 15.5, ZOOM_VITRINE = 18.3, PITCH_VITRINE = 62;
 let indexDecor = null, vueCarte = { longitude: 2.2588, latitude: 48.7255, zoom: 14, pitch: 55, bearing: 0 };
 const cellulesDecor = new Map(), enChargement = new Set();   // cellule -> décor préparé (null = absente/erreur)
 const LARGEUR_ROUTE = { grand: 12, moyen: 9, petit: 6, pieton: 2.5 };
@@ -548,6 +563,7 @@ function calquesTrains(p, ech, couleurAlpha) {
 }
 
 function calques(maintenant = performance.now()) {
+  const modeAffiche = vitrineEnCours() ? "train" : mode;   // vitrine : jamais d'incertitude
   const L = [];
   if (!geo) return L;
   L.push(...calquesDecor());
@@ -578,7 +594,7 @@ function calques(maintenant = performance.now()) {
   groupes = new Map(rg.bulles.map(b => [b.chef, b.membres]));
   const p = p0.map(t => ({ ...t, alpha: rg.alpha[t.course] == null ? 1 : rg.alpha[t.course] })).filter(t => t.alpha > 0.02);
   const couleurAlpha = t => [...couleurTrain(t), Math.round(255 * t.alpha)];
-  if (mode !== "train") {   // incertitude : chemin approximatif le long de la voie (serveur, J2 bis, points ~8 s), jamais un disque : l'erreur est le long des rails ; non ancré sur la position animée (saute à chaque relevé)
+  if (modeAffiche !== "train") {   // incertitude : chemin approximatif le long de la voie (serveur, J2 bis, points ~8 s), jamais un disque : l'erreur est le long des rails ; non ancré sur la position animée (saute à chaque relevé)
     const avecChemin = (d, cle) => d.alpha > 0.3 && d.incertitude && d.incertitude[cle] && d.incertitude[cle].length > 1;
     for (const [id, cle, largeur, couleur] of [["incertitude-p90", "p90", 26, [214, 158, 46, 70]], ["incertitude-mediane", "mediane", 14, [183, 121, 31, 130]]]) {
       L.push(new deck.PathLayer({
@@ -588,18 +604,18 @@ function calques(maintenant = performance.now()) {
       }));
     }
   }
-  if (mode === "zone") {
+  if (modeAffiche === "zone") {
     L.push(new deck.ScatterplotLayer({
       id: "pastilles", data: p, getPosition: d => [d.lon, d.lat], getRadius: 1, radiusMinPixels: 6,
       radiusMaxPixels: 7, getFillColor: couleurAlpha, getLineColor: [255, 255, 255], stroked: true, lineWidthMinPixels: 1.5,
       pickable: true,
     }));
   }
-  if (mode !== "zone") {   // socle et contours d'état autour des rames (remplacent le halo rouge du terminus et l'anneau de sélection)
+  if (modeAffiche !== "zone") {   // socle et contours d'état autour des rames (remplacent le halo rouge du terminus et l'anneau de sélection)
     const mpp = 78271.517 * Math.cos(48.8 * Math.PI / 180) / Math.pow(2, zoom);
     L.push(...calquesRames(p, echelleTrain(zoom), mpp, 0.5 + 0.5 * Math.sin(maintenant / 280), selection));
   }
-  if (mode !== "zone") L.push(...calquesTrains(p, echelleTrain(zoom), couleurAlpha));
+  if (modeAffiche !== "zone") L.push(...calquesTrains(p, echelleTrain(zoom), couleurAlpha));
   if (vp && rg.bulles.length) {   // bulle « n » à côté du train chef ; son opacité est l'inverse de celle des trains qui s'effacent
     const bulles = rg.bulles.map(b => { const [lon, lat] = vp.unproject([b.x + 13, b.y - 13]); return { ...b, lon, lat }; });
     L.push(new deck.ScatterplotLayer({
@@ -623,7 +639,7 @@ function afficher(maintenant = performance.now()) { if (deckgl) deckgl.setProps(
 // Déplacer = glisser (comme Google Maps / Google Earth). Tourner / incliner = clic droit ou Ctrl + glisser, deux doigts, glisser la boussole, ou boutons.
 const LIMITES_VUE = { minZoom: 8, maxZoom: 21, maxPitch: MAX_PITCH };
 const nettoyerVue = v => ({ longitude: v.longitude, latitude: v.latitude, zoom: v.zoom, pitch: v.pitch || 0, bearing: v.bearing || 0, ...LIMITES_VUE });
-let vue = nettoyerVue({ ...MASSY, zoom: ZOOM_DEPART, pitch: 55, bearing: 0 });
+let vue = nettoyerVue({ longitude: CENTRE_VITRINE.lon, latitude: CENTRE_VITRINE.lat, zoom: ZOOM_DEPART, pitch: 60, bearing: 20 });
 
 function appliquerVue(v) {
   vue = nettoyerVue(v);
@@ -721,6 +737,7 @@ function creerDeck() {
       // glisser pour déplacer = l'utilisateur prend la main, on ne suit plus (le zoom à la molette déplace aussi un peu : il ne compte pas)
       if (i.isDragging && i.isPanning && !i.isZooming) { if (suivi) arreterSuivi(); vol = null; }
       else if (i.isDragging || i.isZooming || i.isRotating) vol = null;
+      if (i.isDragging || i.isZooming || i.isRotating) vitrineMain = true;
       appliquerVue(viewState); placerBulle();
       if (Math.round(zoom * 10) !== avantPas || (zoom >= 11.5) !== avantNoms || clesPretes().join() !== avantCles) afficher();
     },
@@ -941,6 +958,7 @@ async function actualiser() {
     if (!Array.isArray(d.trains)) throw new Error("réponse invalide");
     statut = d; trains = d.trains; derniereReponseMs = performance.now(); majAffiches(derniereReponseMs);
     if (d.trains.length || (!d.erreur && !d.bloque)) premiereReponse = true;
+    lancerVitrine();
     if (selection && !trains.some(t => t.course === selection)) { selection = null; suivi = null; }   // le train choisi a disparu
   } catch (e) {
     const lent = e && e.name === "AbortError";
@@ -963,13 +981,27 @@ function afficherChargement(e) {
   $("chargement-message").textContent = e.message;
   $("chargement-reessayer").hidden = !e.reessayer;
 }
-let accueilFerme = false, accueilVu = false;
+let accueilFerme = false, accueilVu = false, accueilSortie = false, vitrineMain = false, vitrineCourse = null;
+const vitrineEnCours = () => vitrineActive({ vu: accueilVu, ferme: accueilFerme, sortie: accueilSortie });
+const mouvementReduit = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+function lancerVitrine() {   // caméra de suivi sur un train qui circule (jamais si le visiteur a pris la main)
+  if (!vitrineEnCours() || vitrineMain || !premiereReponse) return;
+  if (vitrineCourse && trainAffiche(vitrineCourse)) return;
+  const liste = placesAffiches(performance.now()), course = trainVitrine(liste), t = course && liste.find(x => x.course === course);
+  if (!t) return;
+  vitrineCourse = course; suivi = course; groupeOuvert = null;
+  const cap = capVitrine(t.cap);
+  voler(() => ({ ...(cibleSuivi() || { longitude: t.lon, latitude: t.lat }), zoom: ZOOM_VITRINE, pitch: PITCH_VITRINE, bearing: cap }), mouvementReduit() ? 1 : 3200);
+  afficher();
+}
 try { accueilVu = sessionStorage.getItem("accueil-vu") === "1"; } catch (e) { /* stockage de session indisponible : on présente à chaque chargement */ }
 function majAccueil() {
   const e = etatAccueil({ vu: accueilVu, recu: premiereReponse, ferme: accueilFerme });
   const a = $("accueil");
   a.hidden = !e.afficher;
   a.classList.toggle("compact", e.compact);
+  a.classList.toggle("sortie", accueilSortie);
+  $("carte").classList.toggle("vitrine", vitrineEnCours() && e.afficher);
   $("accueil-entrer").disabled = !e.bouton;
   $("accueil-entrer").textContent = e.bouton ? "Voir les trains" : "Chargement…";
 }
@@ -1060,7 +1092,9 @@ async function demarrer() {
   choix.addEventListener("change", () => { gareChoisie = choix.value; dernierePrevision = null; sequenceGare++; afficherProchains(); actualiserGare(); });
   creerDeck();
   // ouverture : la caméra s'éloigne vers toute la ligne (sauf vue imposée par l'adresse ; sans animation si l'utilisateur la réduit)
-  if (!new URLSearchParams(location.search).get("vue")) {
+  // première visite : pas de vol vers toute la ligne, la caméra attend les données pour suivre un train (vitrine)
+  if (new URLSearchParams(location.search).get("vue")) vitrineMain = true;
+  else if (!vitrineEnCours()) {
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) appliquerVue(boiteLigne()); else voler(boiteLigne(), 2600);
   }
   chargerDecor();
@@ -1102,12 +1136,16 @@ async function demarrer() {
     const radio = document.querySelector(`input[name=mode][value=${mode === "train" ? "mixte" : "train"}]`);
     radio.checked = true; radio.dispatchEvent(new Event("change"));
   });
-  $("accueil-entrer").addEventListener("click", () => {
-    accueilFerme = true;
+  $("accueil-entrer").addEventListener("click", () => {   // la carte de présentation part vers le haut ; la caméra continue de suivre le train
     try { sessionStorage.setItem("accueil-vu", "1"); } catch (e) { /* tant pis : présentée à nouveau au prochain chargement */ }
-    majAccueil();
+    const fin = () => { accueilFerme = true; accueilSortie = false; majAccueil(); };
+    accueilSortie = true; majAccueil(); afficher();
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) fin(); else setTimeout(fin, 550);
   });
-  $("accueil-revoir").addEventListener("click", () => { accueilFerme = false; accueilVu = false; $("d-apropos").open = false; majAccueil(); });
+  $("accueil-revoir").addEventListener("click", () => {
+    accueilFerme = false; accueilVu = false; accueilSortie = false; vitrineMain = false; vitrineCourse = null; $("d-apropos").open = false;
+    majAccueil(); lancerVitrine(); afficher();
+  });
   // vue de départ réglable par l'adresse : ?vue=longitude,latitude,zoom,inclinaison,cap (utile pour partager ou tester une vue)
   const v = new URLSearchParams(location.search).get("vue");
   if (v) {

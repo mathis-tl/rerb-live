@@ -181,8 +181,10 @@ label.choix input { margin: 0; accent-color: var(--accent); }
 /* --- arrivée : la carte reste visible et animée derrière ; une seule fiche de présentation sur le côté, sans voile ni flou */
 #accueil { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
 #accueil[hidden] { display: none; }
-.carte-accueil { position: absolute; left: 40px; top: 50%; transform: translateY(-50%); width: min(380px, calc(100% - 32px)); pointer-events: auto;
+.carte-accueil { position: absolute; left: 40px; top: 50%; transform: translateY(-50%); width: min(380px, calc(100% - 32px)); pointer-events: auto; transition: transform .5s ease-in, opacity .5s ease-in;
   background: var(--surface); border: var(--cadre); border-top: var(--cadre-haut); border-radius: var(--rayon); padding: 24px 26px 22px; }
+#accueil.sortie .carte-accueil { transform: translateY(-50%) translateY(-110vh); opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .carte-accueil { transition: none; } }
 .carte-accueil h1 { font-size: var(--t4); line-height: 1.05; margin: 0 0 12px; }
 .carte-accueil .phrase { margin: 0 0 18px; font-size: 15px; color: var(--encre-2); max-width: 32ch; }
 .carte-accueil .aide { margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(--filet); font: var(--t1)/1.5 var(--f-mono); color: var(--encre-2); }
@@ -200,6 +202,11 @@ label.choix input { margin: 0; accent-color: var(--accent); }
 #accueil.compact #chargement { margin: 0; min-height: 0; }
 #accueil.compact #chargement p { margin: 0; }
 #accueil.compact .roue { display: none; }
+
+/* --- vitrine : pendant la présentation, la carte est seule avec le train suivi ; l'interface revient quand la fiche part */
+#barre-haut, #commandes-carte, #dock { transition: opacity .4s; }
+#carte.vitrine #barre-haut, #carte.vitrine #commandes-carte, #carte.vitrine #dock { opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { #barre-haut, #commandes-carte, #dock { transition: none; } }
 
 /* --- petits écrans (version mobile à venir : ici seulement de quoi ne pas déborder) */
 @media (max-width: 760px) {
