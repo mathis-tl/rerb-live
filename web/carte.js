@@ -71,7 +71,42 @@ let geo = null, trains = [], statut = null, mode = "mixte", zoom = 9, pasZoom = 
 
 // --- Modèles 3D de la rame Z 8100 (web/modele-z8100.js, cotes de la fiche) : détaillé de près, « icône » (style Waze / Google Maps) de loin.
 // De près : deux maillages de caisse (motrice, remorque), posés chacun sur la voie ; la rame se plie dans les courbes. De loin : l'icône, rigide.
-const MODELES = { motrice: ModeleZ8100.construire({ voiture: 0 }), remorque: ModeleZ8100.construire({ voiture: 1 }), icone: ModeleZ8100.construire({ icone: true }) };
+// --- maillages
+// Une pièce par couleur faisait 34 calques de rames par image (81 000 sommets par rame) : 35 images/s au repos (mesure du 21/11). On fusionne donc
+// toutes les pièces opaques en UN maillage dont les couleurs sont portées par les sommets (deck.gl les multiplie par getColor, ici blanc + transparence).
+// Les vitres (translucides, sans écriture de profondeur) et le disque de l'icône (couleur selon l'état) restent à part. De loin (zoom < ZOOM_FIN) la caisse
+// allégée (2 400 sommets au lieu de 22 900) suffit : l'intérieur et le détail des équipements ne se voient pas.
+const ZOOM_FIN = 17.5;
+function modeleFin(zoom) { return zoom >= ZOOM_FIN; }
+function fusionnerPieces(pieces, couleurDe) {
+  if (!pieces.length) return null;
+  const n = pieces.reduce((t, p) => t + p.maillage.positions.value.length, 0);
+  const positions = new Float32Array(n), normals = new Float32Array(n), colors = new Float32Array(n);
+  let o = 0;
+  for (const p of pieces) {
+    const v = p.maillage.positions.value, c = couleurDe(p);
+    positions.set(v, o); normals.set(p.maillage.normals.value, o);
+    for (let i = 0; i < v.length; i += 3) { colors[o + i] = c[0] / 255; colors[o + i + 1] = c[1] / 255; colors[o + i + 2] = c[2] / 255; }
+    o += v.length;
+  }
+  return { positions: { value: positions, size: 3 }, normals: { value: normals, size: 3 }, colors: { value: colors, size: 3 } };
+}
+// --- fin maillages
+
+// --- Modèles 3D, prêts à dessiner : { opaque, vitre, disque } par modèle (fusionnés une seule fois, au chargement).
+const PALETTE_ICONE = { bleu: [84, 100, 146], noir: [52, 56, 62], blanc: [208, 214, 222] };
+function preparerModele(modele, couleurDe) {
+  const pieces = modele.pieces, de = nom => pieces.filter(p => p.nom === nom);
+  return {
+    opaque: fusionnerPieces(pieces.filter(p => p.nom !== "vitre" && p.nom !== "disque"), couleurDe),
+    vitre: de("vitre")[0] || null, disque: de("disque")[0] || null,
+  };
+}
+const MODELES = {
+  motrice: preparerModele(ModeleZ8100.construire({ voiture: 0 }), p => p.couleur), remorque: preparerModele(ModeleZ8100.construire({ voiture: 1 }), p => p.couleur),
+  motriceSimple: preparerModele(ModeleZ8100.construire({ voiture: 0, simple: true }), p => p.couleur), remorqueSimple: preparerModele(ModeleZ8100.construire({ voiture: 1, simple: true }), p => p.couleur),
+  icone: preparerModele(ModeleZ8100.construire({ icone: true }), p => PALETTE_ICONE[p.nom] || p.couleur),
+};
 
 // --- échelle du train
 // De près (zoom >= ZOOM_PLEIN) : modèle détaillé à la taille réelle. Entre ZOOM_PLEIN et ZOOM_DETAIL (15) : le même modèle, élargi progressivement jusqu'à ~10 px de large
@@ -82,7 +117,6 @@ const MODELES = { motrice: ModeleZ8100.construire({ voiture: 0 }), remorque: Mod
 const ZOOM_DETAIL = 15, ZOOM_PLEIN = 16, CIBLE_RAME_PX = 40, CIBLE_LARGEUR_PX = 10;
 const LONGUEUR_RAME_M = 104.05, LARGEUR_ICONE_M = 4.2, LARGEUR_CAISSE_M = 2.798;
 // Palette de l'icône alignée sur le modèle détaillé (bandeau de vitres bleu-violet, bas de caisse sombre) pour que le passage au zoom 15 se voie peu.
-const PALETTE_ICONE = { bleu: [84, 100, 146], noir: [52, 56, 62], blanc: [208, 214, 222] };
 function echelleTrain(zoom) {
   const metresParPixel = 78271.517 * Math.cos(48.8 * Math.PI / 180) / Math.pow(2, zoom);
   const borne = (v, max) => Math.min(max, Math.max(1, v));
@@ -530,34 +564,28 @@ function calquesRames(p, ech, mpp, pulse, selectionnee) {
 
 // Couches d'un niveau de modèle (détaillé ou icône) : une couche par pièce (couleur). L'icône a un disque dessous, coloré selon l'état du train (le détaillé a un socle, voir calquesRames) ;
 // les vitres du modèle détaillé sont semi-transparentes et dessinées en dernier sans écrire la profondeur.
-function calquesTrains(p, ech, couleurAlpha) {
+function calquesTrains(p, ech, couleurAlpha, fin) {
   const matiere = { ambient: 0.55, diffuse: 0.65, shininess: 24, specularColor: [90, 90, 90] };
-  if (ech.detail) {   // de près : une couche par pièce et par type de caisse, chaque caisse posée sur la voie
+  const calque = (id, donnees, maillage, getColor, extra) => new deck.SimpleMeshLayer({ id, data: donnees, mesh: maillage, getPosition: d => [d.lon, d.lat, 0], getColor,
+    sizeScale: 1, material: matiere, ...extra });
+  if (ech.detail) {   // de près : une caisse posée sur la voie (motrice ou remorque), un calque opaque et un calque de vitres par type
     const caisses = voitures(p);
     return [["motrice", d => d.rang === 0 || d.rang === 3], ["remorque", d => d.rang === 1 || d.rang === 2]].flatMap(([type, est]) => {
-      const donnees = caisses.filter(est);
-      return MODELES[type].pieces.map(piece => {
-        const vitre = piece.nom === "vitre";
-        return new deck.SimpleMeshLayer({
-          id: `trains-detail-${type}-${piece.nom}`, data: donnees, mesh: piece.maillage, getPosition: d => [d.lon, d.lat, 0],
-          getColor: d => [...piece.couleur, Math.round((vitre ? 90 : 255) * d.alpha)],
-          getOrientation: orientationVoiture, getScale: [1, ech.largeur, ech.largeur], updateTriggers: { getScale: [ech.largeur] }, sizeScale: 1, pickable: !vitre, material: matiere,
-          parameters: vitre ? { depthWriteEnabled: false } : undefined,
-        });
-      });
+      const donnees = caisses.filter(est), m = MODELES[type + (fin ? "" : "Simple")];
+      const commun = { getOrientation: orientationVoiture, getScale: [1, ech.largeur, ech.largeur], updateTriggers: { getScale: [ech.largeur] } };
+      const L = [calque(`trains-detail-${type}`, donnees, m.opaque, d => [255, 255, 255, Math.round(255 * d.alpha)], { ...commun, pickable: true })];
+      if (fin && m.vitre) L.push(calque(`trains-detail-${type}-vitre`, donnees, m.vitre.maillage, d => [...m.vitre.couleur, Math.round(90 * d.alpha)], { ...commun, parameters: { depthWriteEnabled: false } }));
+      return L;
     });
   }
   const echelle = () => [ech.longueur, ech.largeur, ech.largeur];   // de loin : icône rigide, agrandie
-  return MODELES.icone.pieces.map(piece => {
-    const vitre = piece.nom === "vitre", disque = piece.nom === "disque";
-    return new deck.SimpleMeshLayer({
-      id: `trains-icone-${piece.nom}`, data: p, mesh: piece.maillage, getPosition: d => [d.lon, d.lat, 0],
-      getColor: d => disque ? couleurAlpha(d) : [...(PALETTE_ICONE[piece.nom] || piece.couleur), Math.round((vitre ? 90 : 255) * d.alpha)],
-      getOrientation: orientation, getScale: echelle, updateTriggers: { getScale: [ech.longueur, ech.largeur], getColor: [] }, sizeScale: 1,
-      pickable: !vitre, material: matiere,
-      parameters: vitre ? { depthWriteEnabled: false } : undefined,
-    });
-  });
+  const commun = { getOrientation: orientation, getScale: echelle, updateTriggers: { getScale: [ech.longueur, ech.largeur] } };
+  const m = MODELES.icone;
+  return [
+    calque("trains-icone-corps", p, m.opaque, d => [255, 255, 255, Math.round(255 * d.alpha)], { ...commun, pickable: true }),
+    ...(m.disque ? [calque("trains-icone-disque", p, m.disque.maillage, couleurAlpha, { ...commun, updateTriggers: { ...commun.updateTriggers, getColor: [] }, pickable: true })] : []),
+    ...(m.vitre ? [calque("trains-icone-vitre", p, m.vitre.maillage, d => [...m.vitre.couleur, Math.round(90 * d.alpha)], { ...commun, parameters: { depthWriteEnabled: false } })] : []),
+  ];
 }
 
 function calques(maintenant = performance.now()) {
@@ -613,7 +641,7 @@ function calques(maintenant = performance.now()) {
     const mpp = 78271.517 * Math.cos(48.8 * Math.PI / 180) / Math.pow(2, zoom);
     L.push(...calquesRames(p, echelleTrain(zoom), mpp, 0.5 + 0.5 * Math.sin(maintenant / 280), selection));
   }
-  if (modeAffiche !== "zone") L.push(...calquesTrains(p, echelleTrain(zoom), couleurAlpha));
+  if (modeAffiche !== "zone") L.push(...calquesTrains(p, echelleTrain(zoom), couleurAlpha, modeleFin(zoom)));
   if (vp && rg.bulles.length) {   // bulle « n » à côté du train chef ; son opacité est l'inverse de celle des trains qui s'effacent
     const bulles = rg.bulles.map(b => { const [lon, lat] = vp.unproject([b.x + 13, b.y - 13]); return { ...b, lon, lat }; });
     L.push(new deck.ScatterplotLayer({

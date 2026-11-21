@@ -504,6 +504,37 @@ class TestCodeCarte(unittest.TestCase):
         for mort in ("interfaceDepuis", "INTERFACES", "dataset.ui"):
             self.assertNotIn(mort, self.js, mort)
 
+    # --- rames : peu de calques, modèle allégé de loin (analyse de fluidité du 21/11)
+    def _maillages(self, expression):
+        return self._node("// --- maillages", "// --- fin maillages", expression)
+
+    def test_fusion_des_pieces_en_un_seul_maillage_avec_couleurs_par_sommet(self):
+        r = self._maillages("""(() => { const m = fusionnerPieces([
+            { couleur: [255, 0, 0], maillage: { positions: { value: new Float32Array(9), size: 3 }, normals: { value: new Float32Array(9), size: 3 } } },
+            { couleur: [0, 51, 255], maillage: { positions: { value: new Float32Array(18), size: 3 }, normals: { value: new Float32Array(18), size: 3 } } }], p => p.couleur);
+          return { n: m.positions.value.length, nn: m.normals.value.length, nc: m.colors.value.length, tailles: [m.positions.size, m.normals.size, m.colors.size],
+                   c0: Array.from(m.colors.value.slice(0, 3)), c1: Array.from(m.colors.value.slice(9, 12)) }; })()""")
+        self.assertEqual((r["n"], r["nn"], r["nc"]), (27, 27, 27))
+        self.assertEqual(r["tailles"], [3, 3, 3])
+        self.assertEqual(r["c0"], [1, 0, 0])
+        self.assertAlmostEqual(r["c1"][1], 0.2, places=5)
+        self.assertEqual(r["c1"][2], 1)
+
+    def test_fusion_sans_piece_renvoie_none(self):
+        self.assertIsNone(self._maillages("fusionnerPieces([], p => p.couleur)"))
+
+    def test_modele_allege_de_loin_complet_de_pres(self):
+        self.assertFalse(self._maillages("modeleFin(16)"))
+        self.assertFalse(self._maillages("modeleFin(17.4)"))
+        self.assertTrue(self._maillages("modeleFin(17.5)"))
+        self.assertTrue(self._maillages("modeleFin(19)"))
+
+    def test_les_rames_ne_font_que_quelques_calques(self):
+        # une pièce par couleur (34 calques par image) coûtait 35 images/s au repos : un calque opaque, un pour les vitres
+        self.assertNotIn("MODELES[type].pieces.map", self.js)
+        self.assertIn("fusionnerPieces(", self.js)
+        self.assertIn("simple: true", self.js)
+
     def _echelle(self, zoom):
         return self._node("// --- échelle du train", "// --- fin échelle du train", f"echelleTrain({zoom})")
 
@@ -816,7 +847,7 @@ class TestCodeCarte(unittest.TestCase):
 
     def test_palette_de_l_icone_alignee_sur_le_detaille(self):
         self.assertIn("PALETTE_ICONE = { bleu: [84, 100, 146], noir: [52, 56, 62], blanc: [208, 214, 222] }", self.js)
-        self.assertIn("PALETTE_ICONE[piece.nom] || piece.couleur", self.js)
+        self.assertIn("p => PALETTE_ICONE[p.nom] || p.couleur", self.js)
 
     # --- rame articulée : chaque caisse sur la voie
 
