@@ -218,12 +218,14 @@ function animer() {
 // --- Décor 3D (OpenStreetMap, fichier local web/data/decor-massy.json, absent = pas de décor). Thème = celui du système.
 let decor = null;   // repli sans index : fichier unique de Massy, traité comme une seule cellule
 const sombre = window.matchMedia("(prefers-color-scheme: dark)");
+// --- palette du décor
 const PALETTE = {
   clair:  { fond: "#dfe5e3", sol: [236, 233, 226], vert: [200, 223, 190], eau: [166, 205, 230], bat: [214, 214, 216], bat_defaut: [222, 204, 176], quai: [244, 190, 180, 150],
-            petit: [255, 255, 255], moyen: [255, 255, 255], grand: [250, 232, 190], pieton: [215, 212, 205], rail: [140, 140, 148] },
+            petit: [255, 255, 255], moyen: [255, 255, 255], grand: [250, 232, 190], pieton: [215, 212, 205], rail: [50, 60, 72, 190] },
   sombre: { fond: "#161d28", sol: [30, 36, 48], vert: [28, 58, 48], eau: [24, 44, 86], bat: [44, 50, 66], bat_defaut: [74, 66, 56], quai: [92, 92, 150, 150],
-            petit: [52, 60, 76], moyen: [62, 70, 88], grand: [86, 90, 108], pieton: [44, 50, 62], rail: [110, 118, 134] },
+            petit: [52, 60, 76], moyen: [62, 70, 88], grand: [86, 90, 108], pieton: [44, 50, 62], rail: [255, 255, 255, 135] },   // rails comme dans l'essai « scan » : trait fin qui tranche sur le sol
 };
+// --- fin palette du décor
 
 // --- styles de carte
 // Trois habillages de décor à l'essai, à côté de l'actuel (qui reste le défaut). Choix par l'adresse (?style=scan|transport|verre) ou par les boutons de la carte.
@@ -257,7 +259,6 @@ function appliquerTheme() {
   document.getElementById("carte").style.background = (decor || indexDecor) ? palette().fond : "";
   document.documentElement.dataset.theme = sombreActif() ? "sombre" : "clair";
   document.documentElement.dataset.style = styleCarte;
-  for (const b of document.querySelectorAll("#styles-carte button")) b.setAttribute("aria-pressed", String(b.dataset.style === styleCarte));
 }
 // Décor par cellules (web/data/decor/index.json + <cellule>.json, ~1,5 km chacune), chargées selon la vue à partir de ZOOM_DECOR.
 // Chaque cellule a ses propres couches (identifiant par cellule) : une cellule qui arrive ne redessine QUE elle, les autres gardent leur
@@ -271,7 +272,8 @@ const LARGEUR_ROUTE = { grand: 12, moyen: 9, petit: 6, pieton: 2.5 };
 function preparerCellule(d) {   // regroupe en 3 jeux de données par cellule (surfaces, lignes, bâtiments) une seule fois, au chargement
   return {
     surfaces: [...d.verts.map(p => ({ p, t: "vert" })), ...d.eaux.map(p => ({ p, t: "eau" })), ...d.quais.map(p => ({ p, t: "quai" }))],
-    lignes: [...d.cours_eau.map(c => ({ c, t: "eau", w: 6 })), ...d.routes.map(r => ({ c: r.c, t: r.t, w: LARGEUR_ROUTE[r.t] })), ...d.rails.map(c => ({ c, t: "rail", w: 1.2 }))],
+    lignes: [...d.cours_eau.map(c => ({ c, t: "eau", w: 6 })), ...d.routes.map(r => ({ c: r.c, t: r.t, w: LARGEUR_ROUTE[r.t] }))],
+    rails: d.rails.map(c => ({ c, t: "rail", w: 1.2 })),   // calque à part : visible de loin (au moins 1 px), sans épaissir les routes
     batiments: d.batiments,
   };
 }
@@ -339,6 +341,8 @@ function calquesDecor() {
   for (const [k, cell] of cellules) {
     L.push(new deck.PolygonLayer({ id: "surfaces-" + k, data: cell.surfaces, getPolygon: d => d.p, getFillColor: d => c[d.t], updateTriggers: { getFillColor: [theme] }, stroked: false, filled: true }));
     L.push(new deck.PathLayer({ id: "lignes-" + k, data: cell.lignes, getPath: d => d.c, getColor: d => c[d.t], getWidth: d => d.w, widthUnits: "meters", widthMinPixels: 0.6,
+      capRounded: true, jointRounded: true, updateTriggers: { getColor: [theme] } }));
+    L.push(new deck.PathLayer({ id: "rails-" + k, data: cell.rails, getPath: d => d.c, getColor: d => c.rail, getWidth: d => d.w, widthUnits: "meters", widthMinPixels: 1.1,
       capRounded: true, jointRounded: true, updateTriggers: { getColor: [theme] } }));
     L.push(new deck.PolygonLayer({ id: "batiments-" + k, data: cell.batiments, getPolygon: d => d.p, extruded: true, getElevation: d => d.h,
       getFillColor: d => d.h_src === "defaut" ? c.bat_defaut : c.bat, updateTriggers: { getFillColor: [theme], getLineColor: [theme] },
@@ -978,12 +982,6 @@ async function demarrer() {
   $("incliner-moins").addEventListener("click", () => changerVue(0, -10));
   $("boussole").addEventListener("click", () => changerVue(-(vueCarte.bearing || 0), 0));
   $("boussole-carte").addEventListener("click", () => changerVue(-(vueCarte.bearing || 0), 0));
-  for (const b of document.querySelectorAll("#styles-carte button")) b.addEventListener("click", () => {
-    styleCarte = b.dataset.style;
-    const u = new URL(location.href); if (styleCarte === "actuel") u.searchParams.delete("style"); else u.searchParams.set("style", styleCarte);
-    history.replaceState(null, "", u);
-    appliquerTheme(); afficher();
-  });
   appliquerTheme();
   $("zoom-plus").addEventListener("click", () => voler({ ...vueCarte, zoom: vueCarte.zoom + 1 }, 300));
   $("zoom-moins").addEventListener("click", () => voler({ ...vueCarte, zoom: vueCarte.zoom - 1 }, 300));

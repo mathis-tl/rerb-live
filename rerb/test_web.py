@@ -172,10 +172,44 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIsNone(self._styles("RENDU.actuel"), "l'actuel garde son rendu d'origine")
         self.assertEqual(self._styles("DECORS.scan.fond"), "#000000")
 
-    def test_page_porte_les_boutons_de_style(self):
+    # --- rails visibles (style actuel)
+    def _palette(self, expression):
+        return self._node("// --- palette du décor", "// --- fin palette du décor", expression)
+
+    @staticmethod
+    def _lum(c):
+        return (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255
+
+    def test_rails_se_distinguent_des_routes_dans_les_deux_themes(self):
+        for theme, sens in (("sombre", 1), ("clair", -1)):
+            p = self._palette(f"PALETTE.{theme}")
+            rail = p["rail"]
+            self.assertGreaterEqual(len(rail), 4, "le rail est translucide comme dans la version scan")
+            routes = [self._lum(p[k]) for k in ("petit", "moyen", "grand", "pieton")]
+            ecart = min(abs(self._lum(rail) - r) for r in routes)
+            self.assertGreater(ecart, 0.25, f"thème {theme} : le rail doit trancher sur toutes les routes")
+            if sens > 0:
+                self.assertGreater(self._lum(rail), 0.9, "thème sombre : rails clairs")
+            else:
+                self.assertLess(self._lum(rail), 0.35, "thème clair : rails foncés")
+
+    def test_rails_ont_leur_propre_calque_visible_de_loin(self):
+        corps = self.js.split("function calquesDecor(")[1].split("// --- noms de gares")[0]
+        self.assertIn('"rails-" + k', corps)
+        rail = corps.split('"rails-" + k')[1][:400]
+        m = re.search(r"widthMinPixels: ([0-9.]+)", rail)
+        self.assertIsNotNone(m)
+        self.assertGreaterEqual(float(m.group(1)), 1.0)
+
+    def test_les_rails_ne_sont_plus_dans_le_calque_des_routes(self):
+        corps = self.js.split("function preparerCellule(")[1].split("function clesVisibles")[0]
+        self.assertIn("rails:", corps)
+        self.assertNotIn('t: "rail"', corps.split("lignes:")[1].split("rails:")[0], "les rails ne sont plus mêlés aux routes")
+
+    def test_boutons_de_style_a_l_essai_retires_de_la_page(self):
         html = (WEB / "index.html").read_text(encoding="utf-8")
-        for st in ("actuel", "scan", "transport", "verre"):
-            self.assertIn(f'data-style="{st}"', html)
+        self.assertNotIn('id="styles-carte"', html)
+        self.assertIn("?style=", self.js, "le style reste choisissable par l'adresse")
 
     def _echelle(self, zoom):
         return self._node("// --- échelle du train", "// --- fin échelle du train", f"echelleTrain({zoom})")
