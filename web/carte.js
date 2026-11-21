@@ -87,7 +87,7 @@ function echelleTrain(zoom) {
 const directionTrain = t => (t.cap == null ? null : (t.cap < 90 || t.cap >= 270 ? "nord" : "sud"));
 const garderTrain = (t, filtre) => filtre === "tout" || directionTrain(t) === null || directionTrain(t) === filtre;
 // Une direction à la fois (bouton sur la carte) : pour l'instant les deux sens ne sont pas affichés ensemble.
-const DIRECTIONS = { nord: { titre: "vers le NORD", detail: "Mitry-Claye · Aéroport CDG", autre: "sud" }, sud: { titre: "vers le SUD", detail: "Massy · Saint-Rémy · Robinson", autre: "nord" } };
+const DIRECTIONS = { nord: { titre: "vers le nord", detail: "Mitry-Claye · Aéroport CDG", autre: "sud" }, sud: { titre: "vers le sud", detail: "Massy · Saint-Rémy · Robinson", autre: "nord" } };
 // --- fin direction
 
 // --- regroupement
@@ -231,7 +231,8 @@ function animer() {
 
 // --- Décor 3D (OpenStreetMap, fichier local web/data/decor-massy.json, absent = pas de décor). Thème = celui du système.
 let decor = null;   // repli sans index : fichier unique de Massy, traité comme une seule cellule
-const sombre = window.matchMedia("(prefers-color-scheme: dark)");
+// Version jour seulement (décision du 21/11) : le thème sombre du système est ignoré. Les styles d'essai ?style=… restent sombres d'eux-mêmes.
+const sombre = { matches: false, addEventListener() {} };
 // --- palette du décor
 const PALETTE = {
   clair:  { fond: "#dfe5e3", sol: [236, 233, 226], vert: [200, 223, 190], eau: [166, 205, 230], bat: [214, 214, 216], bat_defaut: [222, 204, 176], quai: [244, 190, 180, 150],
@@ -566,7 +567,7 @@ function calques(maintenant = performance.now()) {
   const nom = styleCarte !== "actuel" ? COULEUR_NOM.sombre : couleurNomGare();
   L.push(new deck.TextLayer({
     id: "noms-gares", data: geo.gares, getPosition: d => [d.lon, d.lat], getText: d => d.nom, getSize: 13, sizeUnits: "pixels",
-    getPixelOffset: [9, -9], getTextAnchor: "start", getColor: nom.texte, characterSet: "auto", fontFamily: "system-ui, sans-serif", fontWeight: 600,
+    getPixelOffset: [9, -9], getTextAnchor: "start", getColor: nom.texte, characterSet: "auto", fontFamily: policeCarte(), fontWeight: 600,
     visible: zoom >= 11.5, background: false, outlineWidth: 4, outlineColor: nom.contour, fontSettings: { sdf: true }, pickable: true,
     updateTriggers: { getColor: [sombre.matches, styleCarte], outlineColor: [sombre.matches, styleCarte] },
     parameters: { depthCompare: "always" },   // jamais cachés par les bâtiments extrudés (Cité Universitaire)
@@ -607,7 +608,7 @@ function calques(maintenant = performance.now()) {
     }));
     L.push(new deck.TextLayer({
       id: "bulles-nombre", data: bulles, getPosition: d => [d.lon, d.lat], getText: d => String(d.n), getSize: 12, sizeUnits: "pixels",
-      getColor: d => [255, 255, 255, Math.round(255 * d.alpha)], characterSet: "auto", fontFamily: "system-ui, sans-serif", fontWeight: 700,
+      getColor: d => [255, 255, 255, Math.round(255 * d.alpha)], characterSet: "auto", fontFamily: policeCarte(), fontWeight: 700,
       getTextAnchor: "middle", getAlignmentBaseline: "center",
     }));
   }
@@ -669,8 +670,6 @@ function etapeCamera(maintenant) {   // appelée à chaque image : fait avancer 
 // Boutons : tourner (± 30°), incliner (± 10°), boussole (clic = nord en haut). Vol court, centre et zoom inchangés.
 function changerVue(dBearing, dPitch) { voler({ ...vueCarte, ...pasVue(vueCarte, dBearing, dPitch) }, 300); }
 function majBoussole() {
-  const hud = $("reperes-vue");
-  if (hud) hud.textContent = `CAP ${String(Math.round(((vueCarte.bearing || 0) % 360 + 360) % 360)).padStart(3, "0")}° · INCL ${String(Math.round(vueCarte.pitch || 0)).padStart(2, "0")}° · ZOOM ${(vueCarte.zoom || 0).toFixed(1)} · POSITIONS ESTIMÉES, PAS GPS`;
   const b = $("boussole");
   if (b) b.style.setProperty("--cap", `${-(vueCarte.bearing || 0)}deg`);
   const c = $("boussole-carte");
@@ -746,6 +745,21 @@ function boiteLigne() {
 function sansTiretLong(s) { return s == null ? "" : String(s).replace(/[\u2013\u2014\u2212]/g, "-"); }
 // --- fin texte
 
+// --- interface
+// Trois directions visuelles à l'essai (version jour), choisies par ?ui=signaletique|atlas|technique ; la première est la valeur par défaut.
+const INTERFACES = ["signaletique", "atlas", "technique"];
+function interfaceDepuis(recherche) {
+  const v = new URLSearchParams(recherche).get("ui");
+  return INTERFACES.includes(v) ? v : INTERFACES[0];
+}
+// --- fin interface
+document.documentElement.dataset.ui = interfaceDepuis(location.search);
+// Police des textes dessinés par deck.gl : la même que celle de la page (variable CSS --f-carte), chargée avant le premier dessin.
+const policeCarte = () => getComputedStyle(document.documentElement).getPropertyValue("--f-carte").trim() || "sans-serif";
+const chargerPolices = () => Promise.race([
+  Promise.all(["400 14px", "600 14px", "700 14px"].map(g => document.fonts.load(g + " " + policeCarte()))).catch(() => {}),
+  new Promise(ok => setTimeout(ok, 2000))]);
+
 // --- Panneau
 const $ = id => document.getElementById(id);
 // Toute donnée venue de PRIM (références de course, gares, motifs) est échappée avant d'entrer dans du HTML.
@@ -760,7 +774,7 @@ function ligneGroupe(m) {   // un train d'un groupe de la bulle ; toute donnée 
 function corpsTrain(t) {   // toute donnée PRIM passe par esc()
   return `<b>${esc(t.etat)}${esc(suffixeEtiquettes(t))}</b>${etiquettes(t).map(e => `<br><span class="note"><b>${e.libelle}</b> : ${e.note}</span>`).join("")}<br>Gare : ${esc(t.gare || "inconnue")}${t.gare_suivante ? "<br>Prochaine gare : " + esc(t.gare_suivante) : ""}`
     + `<br>Retard : ${minutes(t.retard_s)}<br>Mise à jour du train il y a ${t.age_s == null ? "?" : Math.round(t.age_s / 60)} min`
-    + (t.horaires_incoherents ? `<br><b class="retard">⚠ ${esc(t.motif_vitesse)}</b>` : "")
+    + (t.horaires_incoherents ? `<br><b class="retard">Attention : ${esc(t.motif_vitesse)}</b>` : "")
     + (t.reconstruit ? "<br><i>heures reconstruites (gare retirée par PRIM)</i>" : "") + `<br><span class="note">${esc(t.course)}</span>`;
 }
 
@@ -796,7 +810,7 @@ function panneau() {
   $("compteurs").innerHTML = `${trains.length} trains reçus : ${p.length} placés (${n("à quai")} à quai, ${n("en route")} en route, `
     + `${p.filter(t => t.donnees_anciennes).length} à données anciennes, ${p.filter(t => t.horaire_theorique).length} à l'horaire théorique), ${n("non placé")} non placés, ${n("terminé")} terminés, ${n("position inconnue")} position inconnue.`;
   const incoherents = trains.filter(t => t.horaires_incoherents).length;
-  if (incoherents) $("compteurs").append(document.createElement("br"), `⚠ ${incoherents} train(s) aux horaires PRIM incohérents (vitesse limitée à 119 km/h).`);
+  if (incoherents) $("compteurs").append(document.createElement("br"), `Attention : ${incoherents} train(s) aux horaires PRIM incohérents (vitesse limitée à 119 km/h).`);
   const speciaux = trains.filter(t => t.lat == null && t.etat !== "terminé");
   $("liste-speciaux").innerHTML = speciaux.slice(0, 12).map(t =>
     `<div class="special"><b>${esc(t.etat)}</b> <span class="motif">${esc(t.motif)}</span><br><span class="note">${esc(t.course)}</span></div>`).join("")
@@ -960,6 +974,7 @@ function initialiserRecherche() {
 }
 
 async function demarrer() {
+  await chargerPolices();
   $("chargement-reessayer").addEventListener("click", () => {
     if (actionReessayer) { actionReessayer(); return; }
     reessai = true; debutAttente = performance.now(); majChargement(); actualiser();

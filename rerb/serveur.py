@@ -42,7 +42,7 @@ TRACE = RACINE / "data" / "static" / "rerb" / "rerb_trace_C01743.json"
 WEB = RACINE / "web"
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png",
-         ".glb": "model/gltf-binary", ".txt": "text/plain; charset=utf-8"}
+         ".glb": "model/gltf-binary", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8"}
 # Le navigateur lui-même refuse toute requête hors de ce serveur (aucun CDN, aucune tuile, aucun envoi à un tiers).
 EN_TETES = {
     "Content-Security-Policy": ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "

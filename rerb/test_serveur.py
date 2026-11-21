@@ -720,6 +720,7 @@ class TestHttp(unittest.TestCase):
         (self.web / "vendor").mkdir(parents=True)
         (self.web / "index.html").write_text("<html>carte</html>", encoding="utf-8")
         (self.web / "vendor" / "lib.js").write_text("var a=1;", encoding="utf-8")
+        (self.web / "vendor" / "police.woff2").write_bytes(b"wOF2")
         (self.web / ".secret").write_text("non", encoding="utf-8")
         (self.web / "note.exe").write_text("non", encoding="utf-8")
         (Path(self.dossier.name) / "dehors.txt").write_text("hors racine", encoding="utf-8")
@@ -782,6 +783,11 @@ class TestHttp(unittest.TestCase):
         with urllib.request.urlopen(self.base + "/vendor/lib.js") as r:
             self.assertEqual(r.read(), b"var a=1;")
             self.assertTrue(r.headers["Content-Type"].startswith("text/javascript"))
+
+    def test_police_woff2_servie_avec_son_type(self):
+        with urllib.request.urlopen(self.base + "/vendor/police.woff2") as r:
+            self.assertEqual(r.read(), b"wOF2")
+            self.assertEqual(r.headers["Content-Type"], "font/woff2")
 
     def test_statique_refuse_sortie_de_racine_dotfile_et_type_inconnu(self):
         import http.client

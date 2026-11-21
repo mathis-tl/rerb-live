@@ -171,7 +171,7 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn('id="chargement-reessayer"', html)
         self.assertIn('id="etat-donnees"', html)
         css = (WEB / "carte.css").read_text(encoding="utf-8")
-        self.assertIn("@keyframes tourner", css)
+        self.assertIn("@keyframes avancer", css)
         self.assertIn("prefers-reduced-motion", css, "animation coupée si l'utilisateur le demande")
 
     # --- styles de carte à l'essai
@@ -276,10 +276,97 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("left: 50%", regle)
         self.assertIn("translateX(-50%)", regle)
 
-    def test_theme_clair_et_sombre_par_variables_css(self):
-        css = (WEB / "carte.css").read_text(encoding="utf-8")
-        self.assertIn("--verre:", css)
-        self.assertIn("prefers-color-scheme: dark", css)
+    # --- design de la version jour (docs/anti-slop-design.md)
+    POLICES_LOCALES = {"Barlow", "Barlow Semi Condensed", "IBM Plex Mono", "IBM Plex Sans", "Public Sans", "Source Serif 4"}
+    POLICES_BANNIES = ("system-ui", "-apple-system", "BlinkMacSystemFont", "Inter", "Roboto", "Poppins", "Space Grotesk", "DM Sans", "Arial", "Helvetica", "Segoe UI", "SF Pro")
+
+    def _css(self):
+        return (WEB / "carte.css").read_text(encoding="utf-8")
+
+    def test_version_jour_seulement(self):
+        self.assertNotIn("prefers-color-scheme", self._css())
+        self.assertIn("matches: false", self.js.split("const sombre =")[1].split("\n")[0])
+
+    def test_regles_design_pas_de_verre_de_degrade_ni_d_ombre_douce(self):
+        css = self._css()
+        self.assertNotIn("backdrop-filter", css)
+        self.assertNotRegex(css, r"(linear|radial|conic)-gradient")
+        self.assertNotIn("text-shadow", css)
+        for valeur in re.findall(r"box-shadow:\s*([^;]+);", css):
+            self.assertTrue(valeur.startswith("inset") or valeur.strip() == "none", f"ombre douce interdite : {valeur}")
+
+    def test_regles_design_coins_droits(self):
+        css = self._css()
+        for selecteur, corps in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+            for valeur in re.findall(r"border-radius:\s*([^;]+);", corps):
+                for px in re.findall(r"(\d+(?:\.\d+)?)px", valeur):
+                    self.assertLessEqual(float(px), 4, f"{selecteur.strip()} : coin trop arrondi")
+                if "%" in valeur:
+                    self.assertIn(".pastille", selecteur, "seules les pastilles d'état sont rondes")
+        for v in re.findall(r"--rayon:\s*([^;]+);", css):
+            self.assertLessEqual(float(re.match(r"\d+(?:\.\d+)?", v).group()), 4)
+
+    def test_regles_design_polices_locales_et_aucune_police_par_defaut(self):
+        css = self._css()
+        for nom in self.POLICES_BANNIES:
+            motif = r"(?<![A-Za-z-])" + re.escape(nom) + r"(?![A-Za-z])"
+            self.assertIsNone(re.search(motif, css), f"police bannie : {nom}")
+            self.assertIsNone(re.search(motif, self.js), f"police bannie : {nom}")
+        for decl in re.findall(r"--f-(?:texte|titre|mono):\s*([^;]+);", css):
+            premiere = decl.split(",")[0].strip().strip('"')
+            self.assertIn(premiere, self.POLICES_LOCALES, decl)
+        for decl in re.findall(r"font-family:\s*([^;]+);", css):
+            self.assertTrue(decl.strip().startswith(('"', "var(")), decl)
+        self.assertNotIn("fontFamily: \"", self.js, "la police de la carte vient de la variable CSS --f-carte")
+
+    def test_les_fichiers_de_polices_existent_et_sont_notes(self):
+        import hashlib
+        notes = (WEB / "fonts" / "VERSIONS.md").read_text(encoding="utf-8")
+        for url in re.findall(r"url\(([^)]+)\)", self._css()):
+            f = WEB / url
+            self.assertTrue(f.is_file(), url)
+            self.assertEqual(f.read_bytes()[:4], b"wOF2", url)
+            self.assertIn(hashlib.sha256(f.read_bytes()).hexdigest(), notes, f"{url} : somme SHA-256 non notée")
+
+    def test_regles_design_ni_glyphes_d_icone_ni_pseudo_hud(self):
+        for f in ("index.html", "carte.css", "carte.js"):
+            texte = (WEB / f).read_text(encoding="utf-8")
+            for g in "\u26a0\u270b\u27f2\u27f3\u2913\u2912\u25b2\u25b4\u25be\u2715":
+                self.assertNotIn(g, texte, f"{f} : glyphe d'icône {g!r} interdit (SVG ou mot)")
+            self.assertNotIn("reperes-vue", texte)
+            self.assertNotIn("TARGET //", texte)
+
+    def _variables(self, direction):
+        css = self._css()
+        v = dict(re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", re.search(r":root\s*\{([^}]*)\}", css).group(1)))
+        if direction != "signaletique":
+            v.update(re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", re.search(r"html\[data-ui=%s\]\s*\{([^}]*)\}" % direction, css).group(1)))
+        return v
+
+    @staticmethod
+    def _contraste(a, b):
+        def lum(h):
+            c = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            c = [x / 12.92 if x <= .03928 else ((x + .055) / 1.055) ** 2.4 for x in c]
+            return .2126 * c[0] + .7152 * c[1] + .0722 * c[2]
+        la, lb = sorted((lum(a), lum(b)), reverse=True)
+        return (la + .05) / (lb + .05)
+
+    def test_trois_directions_et_textes_lisibles_sur_leur_surface(self):
+        for d in ("signaletique", "atlas", "technique"):
+            v = self._variables(d)
+            for texte in ("--encre", "--encre-2", "--accent"):
+                self.assertGreaterEqual(self._contraste(v[texte], v["--surface"]), 4.5, f"{d} : {texte} sur --surface")
+            self.assertGreaterEqual(self._contraste(v["--encre"], v["--surface-2"]), 4.5, f"{d} : --encre sur --surface-2")
+            self.assertGreaterEqual(self._contraste(v["--principal-texte"], v["--principal-fond"]), 4.5, f"{d} : bouton principal")
+        self.assertNotEqual(self._variables("atlas")["--f-titre"], self._variables("technique")["--f-titre"])
+
+    def test_interface_choisie_par_l_adresse(self):
+        f = lambda q: self._node("// --- interface", "// --- fin interface", f"interfaceDepuis({json.dumps(q)})")
+        self.assertEqual(f(""), "signaletique")
+        self.assertEqual(f("?ui=atlas"), "atlas")
+        self.assertEqual(f("?style=scan&ui=technique"), "technique")
+        self.assertEqual(f("?ui=inconnue"), "signaletique")
 
     def _echelle(self, zoom):
         return self._node("// --- échelle du train", "// --- fin échelle du train", f"echelleTrain({zoom})")

@@ -22,21 +22,20 @@
   <div id="commandes-carte">
     <button id="zoom-plus" type="button" title="Zoom avant" aria-label="Zoom avant"><svg class="pictogramme" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.5v9M1.5 6h9"/></svg></button>
     <button id="zoom-moins" type="button" title="Zoom arrière" aria-label="Zoom arrière"><svg class="pictogramme" viewBox="0 0 12 12" aria-hidden="true"><path d="M1.5 6h9"/></svg></button>
-    <button id="boussole-carte" type="button" title="Boussole : clic = nord en haut ; glisser = tourner (côtés) et incliner (haut / bas)" aria-label="Boussole"><span class="aiguille">▲</span></button>
+    <button id="boussole-carte" type="button" title="Boussole : clic = nord en haut ; glisser = tourner (côtés) et incliner (haut / bas)" aria-label="Boussole"><svg class="aiguille" viewBox="0 0 16 16" aria-hidden="true"><path class="nord" d="M8 1.5 11.5 8h-7z"/><path class="sud" d="M8 14.5 4.5 8h7z"/></svg></button>
     <button id="incliner-carte" type="button" title="Basculer vue de dessus / vue inclinée">2D / 3D</button>
   </div>
   <div id="fiche-train" hidden>
     <h3>Train choisi</h3>
     <div id="fiche-corps" class="note"></div>
-    <button id="fiche-suivi" type="button">Suivre ce train</button><button id="fiche-fermer" type="button" aria-label="Fermer">✕</button>
+    <button id="fiche-suivi" type="button">Suivre ce train</button><button id="fiche-fermer" type="button">Fermer</button>
   </div>
   <div id="fiche-groupe" hidden>
     <h3>Trains proches</h3>
     <div id="detail" class="note"></div>
-    <button id="groupe-fermer" type="button" aria-label="Fermer">✕</button>
+    <button id="groupe-fermer" type="button">Fermer</button>
   </div>
   <div id="etat-donnees" role="status" aria-live="polite" hidden></div>
-  <div id="reperes-vue" aria-hidden="true"></div>
 
   <div id="dock">
     <details id="d-prochains">
@@ -81,11 +80,11 @@
         <h2>Caméra</h2>
         <div id="commandes-vue">
           <button id="vue-ligne" type="button">Toute la ligne</button>
-          <button id="tourner-gauche" type="button" title="Tourner à gauche de 30°">⟲</button>
-          <button id="boussole" type="button" title="Boussole : cliquer pour remettre le nord en haut" aria-label="Boussole"><span class="aiguille">▲</span></button>
-          <button id="tourner-droite" type="button" title="Tourner à droite de 30°">⟳</button>
-          <button id="incliner-moins" type="button" title="Voir de plus haut (jusqu'à 0°, de dessus)">⤓ de haut</button>
-          <button id="incliner-plus" type="button" title="Incliner la vue (jusqu'à 85°, presque à l'horizontale)">⤒ de côté</button>
+          <button id="tourner-gauche" type="button" title="Tourner à gauche de 30°">Gauche</button>
+          <button id="boussole" type="button" title="Boussole : cliquer pour remettre le nord en haut" aria-label="Boussole"><svg class="aiguille" viewBox="0 0 16 16" aria-hidden="true"><path class="nord" d="M8 1.5 11.5 8h-7z"/><path class="sud" d="M8 14.5 4.5 8h7z"/></svg></button>
+          <button id="tourner-droite" type="button" title="Tourner à droite de 30°">Droite</button>
+          <button id="incliner-moins" type="button" title="Voir de plus haut (jusqu'à 0°, de dessus)">De haut</button>
+          <button id="incliner-plus" type="button" title="Incliner la vue (jusqu'à 85°, presque à l'horizontale)">De côté</button>
         </div>
       </div>
     </details>
