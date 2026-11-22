@@ -893,6 +893,28 @@ class TestCodeCarte(unittest.TestCase):
         # deck.gl annonce isPanning aussi pendant un zoom à la molette (le point sous la souris bouge) : seul un vrai glisser arrête le suivi
         self.assertIn("i.isDragging && i.isPanning && !i.isZooming", self.js)
 
+    # --- fond plat (21/11) : plus de vide autour du couloir des rails, à tous les zooms
+    def test_fond_plat_charge_son_index_et_ses_cellules(self):
+        self.assertIn('"/data/fond/index.json"', self.js)
+        self.assertIn('"/data/fond/" + k + ".json"', self.js)
+        self.assertIn("chargerFond()", self.js.split("function demarrer(")[1] if "function demarrer(" in self.js else self.js)
+
+    def test_fond_plat_sous_le_decor_et_sans_ecrire_la_profondeur(self):
+        calques = self.js.split("function calques(")[1].split("\nfunction ")[0]
+        self.assertLess(calques.index("calquesFond()"), calques.index("calquesDecor()"), "le fond est dessiné d'abord")
+        fond = self.js.split("function calquesFond(")[1].split("\n}\n")[0]
+        self.assertIn("depthWriteEnabled: false", fond, "à plat sous le décor : pas de combat de profondeur avec les surfaces des cellules")
+        for famille in ("zones", "verts", "eaux", "routes", "cours_eau"):
+            self.assertIn(famille, fond)
+
+    def test_fond_plat_visible_a_tous_les_zooms_sans_seuil(self):
+        cles = self.js.split("function clesFond(")[1].split("\n}\n")[0]
+        self.assertNotIn("ZOOM_DECOR", cles)
+        self.assertIn("FOND_CELLULES_MAX", cles)
+
+    def test_fond_plat_cite_openstreetmap(self):
+        self.assertIn("indexFond.source", self.js)
+
     def test_decor_par_cellule_pas_de_refonte_globale(self):
         # avant : toutes les cellules fusionnées en un seul jeu de données, tout recalculé à chaque cellule arrivée (saccades au déplacement)
         self.assertIn('lot.t + "-" + k + "-" + i', self.js, "un calque par cellule et par lot")

@@ -440,6 +440,59 @@ function calquesDecor() {
   return L;
 }
 
+// --- fond plat (21/11) : zones, parcs, eaux et grandes routes sur tout le couloir élargi de la ligne (web/data/fond/), à tous les zooms, sans bâtiments.
+// Dessiné AVANT le décor et sans écrire la profondeur : les surfaces des cellules du décor (même plan) passent dessus sans combat de profondeur.
+const FOND_CELLULES_MAX = 80, LARGEUR_ROUTE_FOND = { grand: 14, moyen: 9 };
+let indexFond = null;
+const cellulesFond = new Map(), fondEnChargement = new Set();   // cellule -> données (null = absente/erreur)
+function clesFond() {
+  if (!indexFond) return [];
+  const t = indexFond.taille_deg, demi = 360 / (512 * 2 ** vueCarte.zoom) * Math.max(innerWidth, innerHeight) / 2 * 3;
+  const existe = new Set(indexFond.cellules), cles = [];
+  for (let x = Math.floor((vueCarte.longitude - demi) / t); x <= Math.floor((vueCarte.longitude + demi) / t); x++)
+    for (let y = Math.floor((vueCarte.latitude - demi * 0.7) / t); y <= Math.floor((vueCarte.latitude + demi * 0.7) / t); y++)
+      if (existe.has(x + "_" + y)) cles.push(x + "_" + y);
+  return cles.slice(0, FOND_CELLULES_MAX);
+}
+async function majFond() {
+  const manquantes = clesFond().filter(k => !cellulesFond.has(k) && !fondEnChargement.has(k)).slice(0, 6);
+  if (!manquantes.length) return;
+  await Promise.all(manquantes.map(async k => {
+    fondEnChargement.add(k);
+    try { const r = await fetch("/data/fond/" + k + ".json"); cellulesFond.set(k, r.ok ? await r.json() : null); }
+    catch (e) { /* réessayé au prochain déplacement */ }
+    fondEnChargement.delete(k);
+  }));
+  afficher();
+  if (clesFond().some(k => !cellulesFond.has(k) && !fondEnChargement.has(k))) majFond();
+}
+async function chargerFond() {
+  try {
+    const r = await fetch("/data/fond/index.json");
+    if (!r.ok) return;
+    indexFond = await r.json();
+    const src = $("source-decor");
+    if (src.textContent && !src.textContent.includes("fond de carte")) src.textContent += " ; fond de carte : " + indexFond.source;
+    else if (!src.textContent) { src.textContent = "Fond de carte : " + indexFond.source; src.hidden = false; }
+    majFond();
+  } catch (e) { /* pas de fond plat : la carte garde son vide d'avant */ }
+}
+function calquesFond() {
+  const c = palette(), theme = styleCarte + (sombre.matches ? 1 : 0), L = [], plat = { depthWriteEnabled: false };
+  for (const k of clesFond()) {
+    const f = cellulesFond.get(k);
+    if (!f) continue;
+    const surface = (famille, couleur) => f[famille] && f[famille].length && L.push(new deck.PolygonLayer({ id: `fond-${famille}-${k}`, data: f[famille], getPolygon: d => d, getFillColor: couleur,
+      updateTriggers: { getFillColor: [theme] }, stroked: false, filled: true, parameters: plat }));
+    surface("zones", c.sol); surface("verts", c.vert); surface("eaux", c.eau);
+    if (f.cours_eau && f.cours_eau.length) L.push(new deck.PathLayer({ id: `fond-cours_eau-${k}`, data: f.cours_eau, getPath: d => d, getColor: c.eau, getWidth: 6, widthUnits: "meters", widthMinPixels: 0.8,
+      updateTriggers: { getColor: [theme] }, parameters: plat }));
+    if (f.routes && f.routes.length) L.push(new deck.PathLayer({ id: `fond-routes-${k}`, data: f.routes, getPath: d => d.c, getColor: d => c[d.t], getWidth: d => LARGEUR_ROUTE_FOND[d.t], widthUnits: "meters", widthMinPixels: 0.8,
+      capRounded: true, jointRounded: true, updateTriggers: { getColor: [theme] }, parameters: plat }));
+  }
+  return L;
+}
+
 // --- noms de gares
 // Noms de gares lisibles sur tout fond : texte clair à contour sombre en thème sombre, texte sombre à contour clair en thème clair.
 const COULEUR_NOM = { clair: { texte: [20, 30, 40, 255], contour: [255, 255, 255, 245] }, sombre: { texte: [255, 255, 255, 255], contour: [14, 20, 30, 235] } };
@@ -611,7 +664,7 @@ function calques(maintenant = performance.now()) {
   const modeAffiche = vitrineEnCours() ? "train" : mode;   // vitrine : jamais d'incertitude
   const L = [];
   if (!geo) return L;
-  L.push(...calquesDecor());
+  L.push(...calquesFond(), ...calquesDecor());
   const rendu = RENDU[styleCarte], tr = rendu && rendu.trace;
   if (tr && tr.halo) L.push(new deck.PathLayer({
     id: "trace-halo", data: geo.trace, getPath: d => d, getColor: tr.halo, widthUnits: "meters", getWidth: tr.largeur * 5,
@@ -716,7 +769,7 @@ function appliquerVue(v) {
   vueCarte = { longitude: vue.longitude, latitude: vue.latitude, zoom: vue.zoom, pitch: vue.pitch, bearing: vue.bearing };
   zoom = vue.zoom; pasZoom = Math.round(zoom * 10);
   if (deckgl) deckgl.setProps({ viewState: vue });
-  majBoussole(); majDecor();
+  majBoussole(); majDecor(); majFond();
 }
 
 // --- vol de caméra
@@ -1177,6 +1230,7 @@ async function demarrer() {
   // ouverture : pas de vol vers toute la ligne, la caméra attend les données pour suivre un train (vitrine) ; vue imposée par l'adresse : on la garde
   if (new URLSearchParams(location.search).get("vue")) vitrineMain = true;
   chargerDecor();
+  chargerFond();
   initialiserRecherche();
   $("vue-ligne").addEventListener("click", () => voler(boiteLigne(), 1400));
   $("tourner-gauche").addEventListener("click", () => changerVue(-30, 0));
