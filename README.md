@@ -9,5 +9,5 @@ Position **estimée** (pas GPS) : horaires estimés à chaque arrêt (PRIM `esti
 
 ## Avertissements
 - Quotas PRIM par API (en-têtes du 12/11/2026) : `estimated-timetable` 1 500 requêtes par jour, `stop-monitoring` 1 000 000 par jour.
-- Licence des données PRIM ambiguë (Licence Mobilités / ODbL) : à clarifier avant toute publication d'historique. Aucune donnée brute ne se publie (licences ODbL, MassDOT, HSL).
+- Licences vérifiées par Mathis le 24/11/2026 (ODbL pour OSM, Licence Mobilités pour PRIM, Licence Ouverte 2.0 pour IGN) : publication du site autorisée côté licences. Aucune donnée brute d'historique ne se publie (ODbL, MassDOT, HSL).
 - Les clés (`PRIM_API_KEY`, `MBTA_API_KEY`) vont dans `.env` (ignoré par git), jamais dans le dépôt. Modèle : `.env.example`.
