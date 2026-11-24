@@ -1,4 +1,4 @@
-// Icône contre modèle détaillé (données INVENTÉES) : mêmes échelle, caméra et train ; réutilise web/tableau-rendu.js (chargé avant).
+// Icône contre modèle détaillé (données INVENTÉES) : mêmes échelle, caméra et train ; réutilise outils/pages-dev/tableau-rendu.js (chargé avant).
 "use strict";
 const ANGLES = [
   { titre: "zoom 17,2 (taille réelle), incliné 55°, vu de trois quarts", zoom: 17.2, pitch: 55, bearing: 35 },

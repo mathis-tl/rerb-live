@@ -1,0 +1,15 @@
+# Ce qui n'entre pas dans le déploiement Vercel (site statique web/ + fonctions api/ et rerb/).
+# INVARIANT : aucune clé, aucun secret, aucune adresse personnelle dans les fichiers déployés. Secrets : jamais déployés.
+.env
+.env.*
+*.env
+# Développement et données brutes
+data/raw
+recorder
+outils
+docs
+.agent-work
+.claude
+rerb/exploration
+rerb/test_*.py
+**/__pycache__

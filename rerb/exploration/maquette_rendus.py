@@ -1,6 +1,6 @@
 """J4 (tâche 4) : MAQUETTE visuelle des rendus de la carte, à ouvrir dans un navigateur. HORS LIGNE, aucun appel API.
 
-Usage : python3 -I maquette_rendus.py [SORTIE.html]       (défaut : web/maquette-rendus.html du dépôt)
+Usage : python3 -I maquette_rendus.py [SORTIE.html]       (défaut : outils/pages-dev/maquette-rendus.html du dépôt)
 
 Données : vrai tracé et vraies gares du dépôt (fichiers statiques) ; les TRAINS SONT INVENTÉS (démonstration du rendu,
 pas des positions réelles). Aucune bibliothèque externe, aucun fond de carte en ligne : la page n'envoie rien dehors.
@@ -39,7 +39,7 @@ def arrondi(points):
 
 
 def main():
-    sortie = Path(sys.argv[1]) if len(sys.argv) > 1 else RACINE / "web" / "maquette-rendus.html"
+    sortie = Path(sys.argv[1]) if len(sys.argv) > 1 else RACINE / "outils" / "pages-dev" / "maquette-rendus.html"
     gares = load_stops(CSV)
     geometrie = Geometry(load_morceaux(TRACE), {n: (s.lat, s.lon) for n, s in gares.items()})
     reseau = Reseau({p: geometrie.distance(*p) for p in geometrie.neighbor_pairs()})

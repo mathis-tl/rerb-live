@@ -1,4 +1,4 @@
-// Comparaison avant / après selon le zoom (données INVENTÉES). Réutilise le code de web/tableau-rendu.js (chargé avant) : `calques`, `echelleTrain`, `metresParPixel`.
+// Comparaison avant / après selon le zoom (données INVENTÉES). Réutilise le code de outils/pages-dev/tableau-rendu.js (chargé avant) : `calques`, `echelleTrain`, `metresParPixel`.
 // Une ligne par niveau de zoom entier (un niveau de plus = échelle ×2) ; dans chaque ligne, deux vues côte à côte : « avant » (carte actuelle) et « après » (proposition).
 "use strict";
 

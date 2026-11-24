@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 WEB = Path(__file__).resolve().parent.parent / "web"
+PAGES_DEV = Path(__file__).resolve().parent.parent / "outils" / "pages-dev"   # maquettes hors du site publié (T4)
 FICHIERS = ("index.html", "carte.js", "carte.css", "modele-z8100.js")
 URL_EXTERNE = re.compile(r"(https?:)?//[A-Za-z0-9.-]+\.[a-z]{2,}", re.I)
 
@@ -151,14 +152,15 @@ class TestCodeCarte(unittest.TestCase):
         self.assertEqual(f(bloque=True, erreur="HTTP 401")["type"], "bloque")
 
     def test_onglet_cache_aucune_interrogation(self):
-        self.assertIs(self._chargement("interrogationActive(true)"), False)
-        self.assertIs(self._chargement("interrogationActive(false)"), True)
+        self.assertIs(self._chargement("faut_interroger(10000, 0, true, false, -1e12)"), False)
+        self.assertIs(self._chargement("faut_interroger(10000, 0, false, false, -1e12)"), True)
 
     def test_la_page_se_met_en_pause_et_reprend_au_retour(self):
         self.assertIn('addEventListener("visibilitychange"', self.js)
         for fonction in ("function actualiser()", "function actualiserGare()"):
             corps = self.js.split(fonction)[1][:600]
-            self.assertIn("interrogationActive(document.hidden)", corps, fonction)
+            self.assertIn("faut_interroger(", corps, fonction)
+            self.assertIn("document.hidden", corps, fonction)
 
     def test_requete_trains_a_un_delai_maximal(self):
         corps = self.js.split("async function actualiser()")[1].split("let maj = false")[0]
@@ -1260,13 +1262,13 @@ if __name__ == "__main__":
 
 
 class TestTableauRendu(unittest.TestCase):
-    """Maquette `web/tableau-rendu.html` : un train par état, de près et de loin, en thème clair et sombre (données inventées, aucun serveur PRIM)."""
+    """Maquette `outils/pages-dev/tableau-rendu.html` : un train par état, de près et de loin, en thème clair et sombre (données inventées, aucun serveur PRIM)."""
     ETATS = ("En route", "À quai", "Terminus", "Données anciennes", "Horaire théorique", "Train sélectionné", "Retenu")
     SANS_POSITION = ("Non placé", "Position inconnue", "Terminé")
 
     def setUp(self):
-        self.html = (WEB / "tableau-rendu.html").read_text(encoding="utf-8")
-        self.js = (WEB / "tableau-rendu.js").read_text(encoding="utf-8")
+        self.html = (PAGES_DEV / "tableau-rendu.html").read_text(encoding="utf-8")
+        self.js = (PAGES_DEV / "tableau-rendu.js").read_text(encoding="utf-8")
 
     def test_aucune_adresse_externe_ni_script_en_ligne(self):
         for nom, texte in (("html", self.html), ("js", self.js)):
@@ -1328,8 +1330,8 @@ class TestTableauRendu(unittest.TestCase):
             self.assertIn(vue, self.html + self.js, vue)
 
     def test_page_de_comparaison_avant_apres_par_niveau_de_zoom(self):
-        html = (WEB / "comparaison-zoom.html").read_text(encoding="utf-8")
-        js = (WEB / "comparaison-zoom.js").read_text(encoding="utf-8")
+        html = (PAGES_DEV / "comparaison-zoom.html").read_text(encoding="utf-8")
+        js = (PAGES_DEV / "comparaison-zoom.js").read_text(encoding="utf-8")
         for balise in re.findall(r"<script\b[^>]*>", html):
             self.assertIn("src=", balise)   # CSP du serveur : aucun script en ligne
         for nom, texte in (("html", html), ("js", js)):

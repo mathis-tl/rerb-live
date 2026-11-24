@@ -1,5 +1,5 @@
 // Carte 3D du RER B (J4). deck.gl 9.4.1 servi en local, AUCUN fond de carte, AUCUNE requête hors de ce serveur.
-// Données : /geo (tracé, gares) et /trains (position estimée recalculée par le serveur à chaque requête).
+// Données : /data/geo.json (tracé, gares ; fichier statique) et /trains (position estimée recalculée par le serveur à chaque requête).
 "use strict";
 
 // --- Garde réseau (en plus de la politique CSP envoyée par le serveur) : aucune requête vers un autre site.
@@ -10,13 +10,17 @@ window.fetch = (url, options) => {
   return fetchOrigine(url, options);
 };
 
-const INTERVALLE_MS = 3000;            // le serveur n'appelle PRIM qu'au plus toutes les 120 s : interroger plus souvent ne coûte rien
-
 // --- chargement
 // Le serveur n'appelle PRIM que lorsqu'une page demande /trains : la page ne doit donc interroger que lorsqu'elle est regardée.
+const INTERVALLE_MS = 10000;            // le jour : /trains toutes les 10 s (le serveur n'appelle PRIM qu'au plus toutes les 60 s)
+const INTERVALLE_NUIT_MS = 60000;       // coupure de nuit (01:00-05:00, Paris) : le serveur ne rappelle pas PRIM, la page espace ses requêtes
+const INTERVALLE_GARE_MS = 30000;       // prochains trains : /gare toutes les 30 s (le serveur répond depuis son cache de 60 s)
+const PAUSE_INACTIVITE_MS = 30 * 60 * 1000;   // sans action pendant 30 min : arrêt des requêtes, reprise au premier geste
+const MARGE_MINUTERIE_MS = 1000;        // tolérance des minuteries du navigateur
+let intervalleCourantMs = INTERVALLE_MS;      // durée de l'animation entre deux positions : suit la cadence en cours (jour ou nuit)
 const DELAI_LENT_MS = 8000;             // au-delà, on explique que PRIM est lent
 const DELAI_REQUETE_MS = 45000;         // le serveur attend PRIM jusqu'à 30 s : au-delà de 45 s, la requête est abandonnée
-const SEUIL_MAJ_S = 120;                // relevé plus vieux que l'intervalle serveur : le prochain /trains rappelle PRIM
+const SEUIL_MAJ_S = 60;                 // relevé plus vieux que l'intervalle serveur (60 s) : le prochain /trains rappelle PRIM
 // Écran de chargement (avant les premières données). null = rien à montrer.
 function etatChargement({ recu, attenteMs, erreur, bloque, reessai }) {
   if (recu) return null;
@@ -27,13 +31,22 @@ function etatChargement({ recu, attenteMs, erreur, bloque, reessai }) {
     : { type: "attente", reessayer: false, message: "Chargement des trains du RER B…" };
 }
 // Pastille discrète une fois les premières données reçues. null = rien à montrer.
-function etatDonnees({ enCours, ageS, erreur, bloque, reveil }) {
+function etatDonnees({ enCours, ageS, erreur, bloque, reveil, nuit, pause }) {
   if (bloque) return { type: "bloque", message: "PRIM ne répond plus (clé refusée ou quota) : positions du dernier relevé." };
   if (erreur) return { type: "erreur", message: "Connexion perdue : positions du dernier relevé reçu." };
+  if (nuit) return { type: "nuit", message: "Service de nuit, reprise à 05:00. Positions du dernier relevé." };
+  if (pause) return { type: "pause", message: "Mise à jour en pause après 30 min d'inactivité. Toucher la carte pour reprendre." };
   if (enCours && (reveil || ageS >= SEUIL_MAJ_S)) return { type: "maj", message: "Mise à jour des trains…" };
   return null;
 }
-function interrogationActive(cache) { return !cache; }
+// Vrai = la page peut interroger le serveur maintenant. Onglet caché : non. Plus de 30 min sans action : pause.
+// Nuit : une requête /trains au plus toutes les 60 s (le serveur ne rappelle pas PRIM). Fonction pure, testée avec node.
+function faut_interroger(maintenant_ms, derniere_action_ms, cache, nuit, derniere_requete_ms) {
+  if (cache) return false;
+  if (maintenant_ms - derniere_action_ms >= PAUSE_INACTIVITE_MS) return false;
+  if (nuit && maintenant_ms - derniere_requete_ms < INTERVALLE_NUIT_MS - MARGE_MINUTERIE_MS) return false;
+  return true;
+}
 // --- fin chargement
 
 // --- accueil
@@ -249,7 +262,7 @@ function majAffiches(maintenant) {
     const saut = metres([lon, lat], vers);
     e.de = [lon, lat, cap]; e.vers = vers; e.t0 = maintenant;
     if (t.voie) e.voie = t.voie;   // au terminus le serveur n'en envoie plus : on garde la dernière
-    e.duree = saut > SEUIL_CORRECTION_M ? Math.min(DUREE_CORRECTION_MAX_MS, saut / 50 * 1000) : INTERVALLE_MS;
+    e.duree = saut > SEUIL_CORRECTION_M ? Math.min(DUREE_CORRECTION_MAX_MS, saut / 50 * 1000) : intervalleCourantMs;
   });
   for (const c of [...affiches.keys()]) if (!presents.has(c)) affiches.delete(c);
 }
@@ -575,7 +588,7 @@ const orientationVoiture = d => [0, 90 - d.cap + (d.rang >= 2 ? 180 : 0), 0];
 // --- fin voitures
 
 // --- contour
-// Contour d'état en « gélule » posé au sol autour de la rame (maquette validée le 18/11 : web/tableau-rendu.html) : un tracé par état, épaisseur en PIXELS constante, identique
+// Contour d'état en « gélule » posé au sol autour de la rame (maquette validée le 18/11 : outils/pages-dev/tableau-rendu.html) : un tracé par état, épaisseur en PIXELS constante, identique
 // de près et de loin ; plusieurs états = tracés emboîtés, le plus important au plus près de la rame. De près, un socle de la couleur de l'état (à quai, en route, terminus, données
 // anciennes) remplit la gélule : il remplace le disque de l'icône de loin. La gélule suit la voie (rame pliée en courbe).
 const PX_TRAIT = 2.4, PX_ECART = 3.5, PX_PULSE = 1.6, DEMI_LARGEUR_CAISSE_M = 1.45;
@@ -1056,7 +1069,7 @@ function afficherProchains() {
 
 let sequenceGare = 0, gareEnCours = false;
 async function actualiserGare() {
-  if (!interrogationActive(document.hidden)) return;   // onglet caché : pas d'appel
+  if (!faut_interroger(performance.now(), derniereActionMs, document.hidden, false, 0)) return;   // onglet caché ou en pause : pas d'appel
   if (gareEnCours) return;                        // pas d'empilement si le serveur est lent
   gareEnCours = true;
   const demandee = gareChoisie, numero = ++sequenceGare;
@@ -1073,19 +1086,33 @@ async function actualiserGare() {
   afficherProchains();
 }
 
+// Inactivité : toute action remet le compteur à zéro ; après une pause, reprise immédiate (une requête tout de suite).
+let derniereActionMs = performance.now(), derniereRequeteTrainsMs = -Infinity;
+function surAction() {
+  const maintenant = performance.now();
+  const etaitEnPause = !faut_interroger(maintenant, derniereActionMs, false, false, 0);
+  derniereActionMs = maintenant;
+  if (etaitEnPause) { actualiser(); actualiserGare(); }
+}
+["pointerdown", "pointermove", "wheel", "keydown", "touchstart"].forEach(t => document.addEventListener(t, surAction, { passive: true }));
+
 let trainsEnCours = false;
 async function actualiser() {
-  if (!interrogationActive(document.hidden)) return;   // onglet caché : on n'interroge pas, donc on ne déclenche aucun appel PRIM
+  const maintenant = performance.now();
+  // onglet caché, pause après 30 min sans action, nuit (une requête par minute) : aucun appel PRIM
+  if (!faut_interroger(maintenant, derniereActionMs, document.hidden, statut && statut.service === "nuit", derniereRequeteTrainsMs)) return;
   if (trainsEnCours) return;                      // pas d'empilement : une seule requête /trains à la fois
-  trainsEnCours = true;
-  debutRequeteMs = performance.now();
+  trainsEnCours = true; derniereRequeteTrainsMs = maintenant;
+  debutRequeteMs = maintenant;
   setTimeout(majChargement, 900);                 // la pastille « mise à jour » n'apparaît que si la requête traîne
   const abandon = new AbortController(), minuteur = setTimeout(() => abandon.abort(), DELAI_REQUETE_MS);
   try {
     const r = await fetch("/trains", { cache: "no-store", signal: abandon.signal });
     const d = await r.json();
     if (!Array.isArray(d.trains)) throw new Error("réponse invalide");
-    statut = d; trains = d.trains; derniereReponseMs = performance.now(); majAffiches(derniereReponseMs);
+    statut = d; trains = d.trains; derniereReponseMs = performance.now();
+    intervalleCourantMs = d.service === "nuit" ? INTERVALLE_NUIT_MS : INTERVALLE_MS;
+    majAffiches(derniereReponseMs);
     if (d.trains.length || (!d.erreur && !d.bloque)) premiereReponse = true;
     lancerVitrine(); echaufferSelection();
     if (selection && !trains.some(t => t.course === selection)) { selection = null; suivi = null; }   // le train choisi a disparu
@@ -1148,7 +1175,9 @@ function majChargement() {
   const e = premiereReponse ? etatDonnees({
     enCours: trainsEnCours && debutRequeteMs != null && maintenant - debutRequeteMs > 800,   // pas de clignotement pour une requête rapide
     ageS: derniereReponseMs == null ? 0 : (maintenant - derniereReponseMs) / 1000,
-    erreur, bloque: !!(statut && statut.bloque), reveil }) : null;
+    erreur, bloque: !!(statut && statut.bloque), reveil,
+    nuit: !!(statut && statut.service === "nuit"),
+    pause: !document.hidden && !faut_interroger(maintenant, derniereActionMs, false, false, 0) }) : null;
   p.hidden = !e;
   if (e) { p.dataset.type = e.type; p.textContent = e.message; }
   majAccueil();
@@ -1207,7 +1236,7 @@ async function demarrer() {
   $("direction-changer").addEventListener("click", () => reglerDirection(DIRECTIONS[filtreDirection].autre));
   reglerDirection(filtreDirection);
   try {
-    const rg = await fetch("/geo");
+    const rg = await fetch("/data/geo.json");
     if (!rg.ok) throw new Error("HTTP " + rg.status);
     geo = await rg.json();
     geo.gares.forEach(g => { g.nom = sansTiretLong(g.nom); });
@@ -1284,16 +1313,18 @@ async function demarrer() {
     const [longitude, latitude, z, pitch, bearing] = v.split(",").map(Number);
     if ([longitude, latitude, z].every(Number.isFinite)) appliquerVue({ longitude, latitude, zoom: z, pitch: pitch || 0, bearing: bearing || 0 });
   }
-  // retour sur l'onglet : reprise immédiate (le serveur rappelle PRIM si son relevé a plus de 120 s)
+  // retour sur l'onglet : reprise immédiate (le serveur rappelle PRIM si son relevé a plus de 60 s)
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) return;
     if (!premiereReponse) debutAttente = performance.now();
+    derniereActionMs = performance.now();   // l'onglet caché ne compte pas : au retour, le compteur repart de zéro
     reveil = true; actualiser(); actualiserGare();
   });
   await actualiser();
-  setInterval(actualiser, INTERVALLE_MS);
+  // toutes les 10 s ; la nuit, actualiser() n'envoie une requête que toutes les 60 s. La pastille (pause, nuit) se met à jour ici.
+  setInterval(() => { actualiser(); majChargement(); }, INTERVALLE_MS);
   actualiserGare();
-  setInterval(actualiserGare, 15000);   // le serveur ne rappelle PRIM qu'au plus toutes les 60 s par gare
+  setInterval(actualiserGare, INTERVALLE_GARE_MS);   // le serveur ne rappelle PRIM qu'au plus toutes les 60 s par gare
 }
 
 demarrer();
