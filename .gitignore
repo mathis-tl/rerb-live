@@ -1,8 +1,16 @@
-.env
+.env*
+!.env.example
 data/raw/
 __pycache__/
 .venv/
 node_modules/
+.claude/*
+!.claude/check.sh
 .claude/worktrees/
-data/static/
-web/data/
+docs/
+.agent-work/
+Capture d’écran*
+datasets.csv
+datasets.rss
+*.lock
+.DS_Store
