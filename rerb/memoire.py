@@ -12,7 +12,13 @@ Règles :
 • Mémoire par train (clé fournie par l'appelant, par ex. DatedVehicleJourneyRef). Un relevé sans passage
   n'efface pas la mémoire.
 """
-from dataclasses import replace
+from dataclasses import fields, replace
+from datetime import datetime
+
+from position import Passage
+
+_INSTANTS = {"arrivee", "depart", "retenu_depuis", "retenu_le"}   # champs de Passage qui sont des instants (ISO 8601 en JSON)
+VERSION_FORMAT = 1
 
 
 def _cle_temps(p):
@@ -23,6 +29,21 @@ def _cle_temps(p):
 class Memoire:
     def __init__(self):
         self._precedent = {}  # clé du train -> passages consolidés du dernier relevé, triés par heure
+
+    def exporter(self):
+        """Passages retenus en JSON pur (instants en ISO 8601, format versionné)."""
+        return {"v": VERSION_FORMAT,
+                "trains": {cle: [{f.name: (getattr(p, f.name).isoformat() if f.name in _INSTANTS and getattr(p, f.name) is not None
+                                           else getattr(p, f.name)) for f in fields(Passage)} for p in passages]
+                           for cle, passages in self._precedent.items()}}
+
+    def importer(self, d):
+        """Remplace la mémoire par celle d'un `exporter()`."""
+        if d.get("v") != VERSION_FORMAT:
+            raise ValueError(f"format de mémoire inconnu : {d.get('v')!r}")
+        self._precedent = {cle: [Passage(**{k: (datetime.fromisoformat(v) if k in _INSTANTS and v is not None else v)
+                                            for k, v in p.items()}) for p in passages]
+                           for cle, passages in d["trains"].items()}
 
     def consolider(self, cle, train):
         """Train du relevé courant + gares retirées gardées en mémoire -> Train consolidé."""

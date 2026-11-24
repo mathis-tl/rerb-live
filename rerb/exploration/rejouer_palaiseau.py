@@ -97,6 +97,8 @@ def rejouer(releves, debut, fin, lisser, regle_sejour, tolerance_s=None, rampe=N
         while t <= fin:
             while i < len(releves) and releves[i][0] <= t:
                 courant = Releve(releves[i][0], consolider_livraison(releves[i][1], memoire))
+                if lisseur is not None:   # T3 : le lissage est avancé une fois par relevé reçu, puis lu seul
+                    lisseur.avancer({ref: tr for ref, (tr, _r) in courant.trains.items()}, courant.recu)
                 nouveau, i = True, i + 1
             if courant is not None:
                 for d in calculer_trains(courant, t, distance, localiser, nom, lisseur=lisseur):

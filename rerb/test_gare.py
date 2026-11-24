@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from gare import ReleveurGares, lire_passages
+from magasin import MagasinLocal
 from serveur import ErreurPrim, Plafond
 
 T0 = datetime(2026, 11, 16, 10, 0, 0, tzinfo=timezone.utc)
@@ -119,7 +120,7 @@ class TestReleveurGares(unittest.TestCase):
         self.addCleanup(self.dossier.cleanup)
 
     def releveur(self, fausse, maximum=5000, intervalle=60):
-        plafond = Plafond(Path(self.dossier.name) / "p.json", maximum, lambda: date(2026, 11, 16))
+        plafond = Plafond(MagasinLocal(Path(self.dossier.name) / "p.json"), maximum, horloge=lambda: T0)
         return ReleveurGares(fausse, plafond, intervalle_s=intervalle), plafond
 
     def ok(self, ref="T1"):

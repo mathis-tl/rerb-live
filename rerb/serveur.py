@@ -1,12 +1,14 @@
 """Tâche 4, J3 : serveur local. Cache du dernier relevé PRIM `estimated-timetable`, position recalculée à chaque requête.
 
-Plan : docs/plan-tache-4.md (J3). Décision S3 (Mathis, 16/11/2026) : au plus 1 appel toutes les 120 s, seulement quand
-une requête arrive (carte ouverte), plafond de 1 000 appels par jour (quota PRIM : 1 500).
+Plan : docs/plan-tache-4.md (J3). Décision S3 (Mathis, 16/11/2026), révisée le 24/11/2026 : au plus 1 appel toutes les 60 s, seulement
+quand une requête arrive (carte ouverte), aucun appel de 01:00 à 05:00 (heure de Paris), plafond de 1 300 appels par jour
+(quota PRIM : 1 500). Détails : docs/specs/spec-donnees-prim.md.
 • consolider_livraison : réponse PRIM -> {course: (Train consolidé par la mémoire M2, retards par gare)}.
 • calculer_trains      : relevé + instant -> liste de dicts JSON (état, gare, lat, lon, retard, périmé, âge). Aucun train masqué.
-• Plafond              : compteur d'appels du jour, sauvegardé sur disque.
-• Releveur             : appelle la source si le cache est trop vieux, plafond non atteint, clé non refusée ; un seul appel
-                         à la fois ; une erreur garde le dernier relevé valide. 401, 403, 429 : plus aucun appel.
+• Plafond              : compteur d'appels du jour (date de Paris), lu et écrit dans le magasin (rerb/magasin.py).
+• Releveur             : appelle la source si le cache est trop vieux, hors coupure de nuit, plafond non atteint, clé non refusée ;
+                         un seul appel à la fois, toutes copies confondues (verrou du magasin) ; une erreur garde le dernier relevé
+                         valide. 401, 403, 429 : plus aucun appel. Magasin en panne : aucun appel.
 • creer_serveur        : http.server sur 127.0.0.1 seulement. Routes : /trains, /statut. Le reste : 404.
 La clé PRIM est lue dans `.env` (lire_cle), jamais affichée, jamais écrite dans une réponse ni un message d'erreur.
 Bibliothèque standard seulement. Les tests n'appellent jamais le réseau (fausse source).
@@ -17,21 +19,22 @@ import gzip
 import http.client
 import json
 import math
-import os
 import sys
-import threading
 import urllib.error
 import urllib.parse
+import threading
 import urllib.request
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from duree_troncon import fournisseur_duree_min
 from gare import ReleveurGares
 from geometry import Geometry, NoValidDistance, _dist, load_morceaux, point_a_distance
 from lissage import Lisseur
+from magasin import ErreurMagasin, MagasinLocal
 from memoire import Memoire
 from position import DistanceInconnue, Etat, Reseau, distance_depuis_reseau, estimer, lire_train
 from stops import load_stops, stop_area_number
@@ -62,8 +65,19 @@ EN_TETES = {
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
 }
-INTERVALLE_S = 120
-PLAFOND_JOUR = 1000
+INTERVALLE_S = 60
+PLAFOND_JOUR = 1300
+NUIT_DEBUT_H = 1      # coupure de nuit : aucun appel PRIM de 01:00 (inclus) à 05:00 (exclu), heure de Paris
+NUIT_FIN_H = 5
+FENETRE_NUIT = (NUIT_DEBUT_H, NUIT_FIN_H)
+DELAI_PRIM_S = 20     # délai maximal d'un appel PRIM
+# INVARIANT : VERROU_S > DELAI_PRIM_S + 10. Le verrou doit survivre à l'appel le plus long ; sinon un second appel PRIM part pendant
+# le premier, toutes copies confondues, et le plafond est faux.
+VERROU_S = 35
+NOM_VERROU = "prim"
+CLE_BLOCAGE = "blocage"
+CLE_DERNIERE_TENTATIVE = "derniere_tentative"
+PARIS = ZoneInfo("Europe/Paris")
 STATUTS_CLE_REFUSEE = (401, 403, 429)
 URL_PRIM_ET = "https://prim.iledefrance-mobilites.fr/marketplace/estimated-timetable?LineRef=STIF%3ALine%3A%3AC01743%3A"
 URL_PRIM_SM_GARE = "https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring?MonitoringRef=STIF%3AStopArea%3ASP%3A{}%3A"
@@ -141,7 +155,7 @@ def _nom_sur(nom_gare, ref):
         return ref
 
 
-OBSERVATION_MIN_S = 600.0   # « Horaire théorique » seulement après 10 min de suivi en relevés PRIM distincts (au moins 5 à 120 s) : un train vu une fois, ou un relevé figé, ne prouve rien
+OBSERVATION_MIN_S = 600.0   # « Horaire théorique » seulement après 10 min de suivi en relevés PRIM distincts (au moins 5 à 60 s) : un train vu une fois, ou un relevé figé, ne prouve rien
 
 INCERTITUDE_MEDIANE_S = 44.0   # J2 bis (16/11/2026) : médiane de |départ réel - départ estimé|, mesurée à quai (docs/recap-j2bis-verite-gares.md)
 INCERTITUDE_P90_S = 117.0      # J2 bis : 90e centile. Ordres de grandeur d'un seul jour, pas une erreur mesurée en pleine voie ; biais +53 s non appliqué
@@ -196,14 +210,12 @@ def calculer_trains(releve, maintenant, distance, localiser, nom_gare, duree_min
     sans position, avec son motif. À quai, `gare_suivante` donne l'orientation de la rame (None au terminus).
     `duree_min(ref_gare, ref_gare_suivante)` -> (secondes, source) ou None (tronçon inconnu) : durée minimale plausible du
     tronçon (T1, correction estimée). Jamais sous le plancher distance / VITESSE_MAX_MS, qui sert aussi de repli.
-    `lisseur` (rerb/lissage.py, facultatif) : mémoire des arrivées adoptées ; les heures PRIM sont lissées avant l'estimation de position
-    (une révision de PRIM ne fait pas sauter le train) et les courses absentes du relevé sont oubliées."""
-    if lisseur is not None:
-        lisseur.purger(releve.trains.keys())
+    `lisseur` (rerb/lissage.py, facultatif) : les heures PRIM sont lissées avant l'estimation de position (une révision de PRIM ne fait
+    pas sauter le train). Lecture seule : le relevé a été avancé dans le lisseur une fois, à sa réception (charge_utile)."""
     sortie = []
     for ref, (train, retards) in releve.trains.items():
         if lisseur is not None:
-            train = lisseur.appliquer(ref, train, maintenant, recu=releve.recu)
+            train = lisseur.appliquer(ref, train, maintenant)
         e = estimer(train, maintenant, distance)
         lat = lon = cap = None
         motif = e.motif
@@ -256,84 +268,127 @@ def calculer_trains(releve, maintenant, distance, localiser, nom_gare, duree_min
     return sortie
 
 
-class Plafond:
-    """Nombre d'appels PRIM du jour, sauvegardé dans `fichier` ; repart de 0 chaque jour ou si le fichier est illisible."""
+def jour_paris(instant):
+    """Date civile de Paris de `instant` (aware). Jamais l'heure système : Vercel tourne en UTC."""
+    return instant.astimezone(PARIS).date()
 
-    def __init__(self, fichier, maximum, aujourd_hui=date.today):
-        self._fichier, self.maximum, self._aujourd_hui = Path(fichier), maximum, aujourd_hui
-        self._jour, self._n = self._aujourd_hui(), 0
-        try:
-            d = json.loads(self._fichier.read_text(encoding="utf-8"))
-            if d["jour"] == self._jour.isoformat():
-                self._n = int(d["n"])
-        except (OSError, ValueError, KeyError, TypeError):
-            pass
+
+class Plafond:
+    """Nombre d'appels PRIM du jour, lu et écrit dans `magasin` sous la clé `<nom>:<AAAA-MM-JJ>` (date de Paris).
+    `instant` absent : l'heure vient de `horloge` (UTC réel par défaut). Une panne du magasin lève ErreurMagasin."""
+
+    def __init__(self, magasin, maximum, horloge=None, nom="plafond"):
+        self.magasin, self.maximum, self._nom = magasin, maximum, nom
+        self._horloge = horloge or (lambda: datetime.now(timezone.utc))
+
+    def _cle(self, instant):
+        return f"{self._nom}:{jour_paris(self._horloge() if instant is None else instant).isoformat()}"
+
+    def compte(self, instant=None):
+        return self.magasin.lire_compteur(self._cle(instant))
 
     @property
     def utilises(self):
-        self._verifier_jour()
-        return self._n
+        return self.compte()
 
-    def _verifier_jour(self):
-        if self._aujourd_hui() != self._jour:
-            self._jour, self._n = self._aujourd_hui(), 0
+    def autorise(self, instant=None):
+        return self.compte(instant) < self.maximum
 
-    def autorise(self):
-        return self.utilises < self.maximum
+    def compter(self, instant=None):
+        return self.magasin.incrementer_compteur(self._cle(instant))
 
-    def compter(self):
-        self._verifier_jour()
-        self._n += 1
-        try:
-            self._fichier.write_text(json.dumps({"jour": self._jour.isoformat(), "n": self._n}), encoding="utf-8")
-        except OSError:
-            pass  # le compteur en mémoire reste valable pour ce démarrage
+
+def _utilises(plafond):
+    """Compteur pour l'affichage : None si le magasin est en panne (la réponse reste servie)."""
+    try:
+        return plafond.utilises
+    except ErreurMagasin:
+        return None
 
 
 class Releveur:
-    """Cache du dernier relevé. `fetch()` -> livraison PRIM décodée, ou lève ErreurPrim."""
+    """Cache du dernier relevé. `fetch()` -> livraison PRIM décodée, ou lève ErreurPrim.
+    L'état partagé (verrou, dernière tentative, blocage, plafond) est dans le magasin du plafond : deux copies du serveur qui
+    partagent ce magasin ne font jamais deux appels PRIM à la fois ni au-delà du plafond."""
 
-    def __init__(self, fetch, plafond, intervalle_s=INTERVALLE_S):
-        self._fetch, self._plafond, self._intervalle = fetch, plafond, timedelta(seconds=intervalle_s)
-        self._verrou = threading.Lock()
+    def __init__(self, fetch, plafond, intervalle_s=INTERVALLE_S, fenetre_nuit=FENETRE_NUIT):
+        self._fetch, self._plafond, self._magasin = fetch, plafond, plafond.magasin
+        self._intervalle = timedelta(seconds=intervalle_s)
+        self._fenetre_nuit = fenetre_nuit
         self._memoire = Memoire()
         self.releve = None
         self.derniere_erreur = None
         self.bloque = False
-        self._derniere_tentative = None
+        self._bloque_local = False   # blocage 401/403/429 gardé en local si son écriture dans le magasin a échoué
 
     @property
     def plafond(self):
         return self._plafond
 
+    def est_nuit(self, maintenant):
+        """True pendant la coupure. `fenetre_nuit` None : jamais de coupure (démo).
+        # INVARIANT : l'heure de la coupure se calcule à partir de `maintenant` en Europe/Paris, jamais de l'heure système
+        # (Vercel tourne en UTC ; l'heure d'été décale d'une heure)."""
+        if self._fenetre_nuit is None:
+            return False
+        debut, fin = self._fenetre_nuit
+        return debut <= maintenant.astimezone(PARIS).hour < fin
+
     def actualiser(self, maintenant):
-        """-> 'ok', 'trop tôt', 'plafond', 'bloqué', 'occupé' ou 'erreur'. Au plus un appel en cours."""
-        if not self._verrou.acquire(blocking=False):
-            return "occupé"
+        """-> 'ok', 'trop tôt', 'plafond', 'bloqué', 'nuit', 'occupé', 'erreur' ou 'magasin'. Au plus un appel PRIM en cours.
+        Ordre des contrôles : bloqué, nuit, trop tôt, plafond, verrou, appel. Une panne du magasin : 'magasin', aucun appel."""
+        magasin = self._magasin
         try:
+            self.bloque = self._bloque_local or magasin.lire(CLE_BLOCAGE) is not None
             if self.bloque:
                 return "bloqué"
-            if self._derniere_tentative is not None and maintenant - self._derniere_tentative < self._intervalle:
-                return "trop tôt"
-            if not self._plafond.autorise():
-                return "plafond"
-            self._derniere_tentative = maintenant
-            self._plafond.compter()
+            # Nuit : aucun appel, aucun comptage. Le relevé reste en cache (son âge continue de croître).
+            if self.est_nuit(maintenant):
+                return "nuit"
+            jeton = magasin.prendre_verrou(NOM_VERROU, VERROU_S)
+            if jeton is None:
+                return "occupé"
             try:
-                livraison = self._fetch()
-                trains = consolider_livraison(livraison, self._memoire)
-            except ErreurPrim as erreur:
-                self.derniere_erreur = str(erreur)
-                self.bloque = erreur.statut in STATUTS_CLE_REFUSEE
-                return "erreur"
-            except (KeyError, IndexError, TypeError, ValueError, AttributeError, http.client.HTTPException) as erreur:
-                self.derniere_erreur = f"réponse illisible ({type(erreur).__name__})"
-                return "erreur"
-            self.releve = Releve(maintenant, trains)   # une seule affectation : les requêtes lisent une copie cohérente
-            self.derniere_erreur = None
-            return "ok"
-        finally:
-            self._verrou.release()
+                return self._appeler(maintenant)
+            finally:
+                try:
+                    magasin.rendre_verrou(NOM_VERROU, jeton)
+                except ErreurMagasin:
+                    pass   # le verrou expire seul, au plus tard après VERROU_S
+        except ErreurMagasin as erreur:
+            self.derniere_erreur = f"magasin indisponible ({erreur})"
+            return "magasin"
+
+    def _appeler(self, maintenant):
+        """Contrôles sous verrou (trop tôt, plafond), puis l'appel PRIM. Lève ErreurMagasin si le magasin tombe avant l'appel."""
+        magasin = self._magasin
+        derniere = magasin.lire(CLE_DERNIERE_TENTATIVE)
+        if derniere is not None and maintenant - datetime.fromisoformat(derniere) < self._intervalle:
+            return "trop tôt"
+        if not self._plafond.autorise(maintenant):
+            return "plafond"
+        # INVARIANT : le compteur et la dernière tentative sont écrits AVANT l'appel PRIM. Un appel échoué ou expiré compte quand même,
+        # pour ne jamais sous-estimer la consommation du quota.
+        self._plafond.compter(maintenant)
+        magasin.ecrire(CLE_DERNIERE_TENTATIVE, maintenant.isoformat())
+        try:
+            livraison = self._fetch()
+            trains = consolider_livraison(livraison, self._memoire)
+        except ErreurPrim as erreur:
+            self.derniere_erreur = str(erreur)
+            if erreur.statut in STATUTS_CLE_REFUSEE:
+                self.bloque = self._bloque_local = True
+                try:
+                    magasin.ecrire(CLE_BLOCAGE, {"statut": erreur.statut})
+                except ErreurMagasin:
+                    pass   # blocage gardé en local pour ce démarrage
+            return "erreur"
+        except (KeyError, IndexError, TypeError, ValueError, AttributeError, http.client.HTTPException) as erreur:
+            self.derniere_erreur = f"réponse illisible ({type(erreur).__name__})"
+            return "erreur"
+        self.releve = Releve(maintenant, trains)   # une seule affectation : les requêtes lisent une copie cohérente
+        self.derniere_erreur = None
+        return "ok"
 
 
 def lire_cle(chemin_env, nom="PRIM_API_KEY"):
@@ -358,7 +413,7 @@ _OUVREUR_SANS_REDIRECTION = urllib.request.build_opener(_SansRedirection)
 TAILLE_MAX_REPONSE = 60_000_000      # octets ; l'estimated-timetable du RER B fait ~1 Mo
 
 
-def appeler_prim(cle, url=URL_PRIM_ET, delai=30):
+def appeler_prim(cle, url=URL_PRIM_ET, delai=DELAI_PRIM_S):
     """Un appel GET PRIM -> JSON décodé. Le message d'erreur ne contient ni la clé ni les en-têtes."""
     requete = urllib.request.Request(url, headers={"apikey": cle, "Accept": "application/json"})
     try:
@@ -404,17 +459,27 @@ def creer_serveur(releveur, distance, localiser, nom_gare, port=8765, horloge=No
     horloge = horloge or (lambda: datetime.now(timezone.utc))
     lisseur = lisseur if lisseur is not None else Lisseur()   # un lisseur par serveur : la seule mémoire des relevés passés
     racine_web = Path(racine_web) if racine_web is not None else WEB
+    relevé_vu = {"releve": None}   # dernier relevé donné au lisseur
+    verrou_relevé = threading.Lock()
 
     def charge_utile():
         maintenant = horloge()
         releveur.actualiser(maintenant)
         r = releveur.releve   # copie de la référence : le relevé est immuable
+        if r is not None:
+            with verrou_relevé:
+                # INVARIANT : chaque relevé n'est avancé dans le lisseur qu'UNE fois, à sa réception (identité de l'objet), quelle que soit la
+                # cadence des requêtes : c'est ce qui rend le lissage rejouable (rerb/lissage.py, Lisseur.avancer).
+                if r is not relevé_vu["releve"]:
+                    lisseur.avancer({ref: train for ref, (train, _retards) in r.trains.items()}, r.recu)
+                    relevé_vu["releve"] = r
         return {
             "maintenant": maintenant.isoformat(), "demo": demo,
+            "service": "nuit" if releveur.est_nuit(maintenant) else None,   # coupure de nuit : pas d'appel PRIM, relevé gardé
             "releve_recu": r.recu.isoformat() if r else None,
             "releve_age_s": int((maintenant - r.recu).total_seconds()) if r else None,
             "erreur": releveur.derniere_erreur, "bloque": releveur.bloque,
-            "plafond": {"utilises": releveur.plafond.utilises, "maximum": releveur.plafond.maximum},
+            "plafond": {"utilises": _utilises(releveur.plafond), "maximum": releveur.plafond.maximum},
             "trains": calculer_trains(r, maintenant, distance, localiser, nom_gare, duree_min, lisseur) if r else [],
         }
 
@@ -624,20 +689,21 @@ def main(argv=None):
         from demo import livraison_demo, stop_monitoring_demo
         chaine = chaine_demo()
         source = lambda: livraison_demo(datetime.now(timezone.utc), chaine, distance, revisions=a.revisions)  # noqa: E731
-        releveur = Releveur(source, Plafond(os.devnull, 10 ** 9), intervalle_s=5)
+        releveur = Releveur(source, Plafond(MagasinLocal(), 10 ** 9), intervalle_s=5, fenetre_nuit=None)   # démo : pas de coupure de nuit
         nom_ = nom_gare
         releveur_gares = ReleveurGares(
             lambda ref: stop_monitoring_demo(datetime.now(timezone.utc), ref, chaine, distance, nom_, revisions=a.revisions),
-            Plafond(os.devnull, 10 ** 9), intervalle_s=5)
+            Plafond(MagasinLocal(), 10 ** 9), intervalle_s=5)
         message = "MODE DÉMONSTRATION : trains inventés, aucun appel PRIM, aucune clé lue" + (" ; heures PRIM révisées toutes les 30 s" if a.revisions else "")
     else:
         if a.intervalle < 60 or a.plafond > 1400:
             ap.error("intervalle >= 60 s et plafond <= 1 400 par jour (quota PRIM : 1 500)")
         cle = lire_cle(a.env)
-        releveur = Releveur(lambda: appeler_prim(cle), Plafond(a.fichier_plafond, a.plafond), a.intervalle)
+        releveur = Releveur(lambda: appeler_prim(cle), Plafond(MagasinLocal(a.fichier_plafond), a.plafond), a.intervalle)
         releveur_gares = ReleveurGares(lambda ref: appeler_prim(cle, URL_PRIM_SM_GARE.format(ref.split(":")[3])),
-                                       Plafond(a.fichier_plafond_gares, a.plafond_gares), intervalle_s=60)
-        message = (f"carte : 1 appel PRIM au plus toutes les {a.intervalle} s (plafond {a.plafond} par jour) ; "
+                                       Plafond(MagasinLocal(a.fichier_plafond_gares), a.plafond_gares), intervalle_s=60)
+        message = (f"carte : 1 appel PRIM au plus toutes les {a.intervalle} s, aucun appel de {NUIT_DEBUT_H:02d}:00 à {NUIT_FIN_H:02d}:00 "
+                   f"(heure de Paris), plafond {a.plafond} par jour ; "
                    f"prochains trains : 1 appel par gare au plus toutes les 60 s (plafond {a.plafond_gares} par jour)")
     noms = {n: g.name for n, g in _charger(CSV_GARES, TRACE)[0].items()}
     serveur = creer_serveur(releveur, distance, localiser, nom_gare, a.port, geo=charger_geo(), demo=a.demo,

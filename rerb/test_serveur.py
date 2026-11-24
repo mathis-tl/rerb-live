@@ -18,8 +18,10 @@ from lissage import Lisseur
 from memoire import Memoire
 from position import Etat
 from gare import ReleveurGares
-from serveur import (CSV_GARES, DEMI_VOIE_M, TRACE, ErreurPrim, appeler_prim, Plafond, Releve, Releveur, calculer_trains, chaine_demo, charger_geo,
-                     construire_contexte, consolider_livraison, creer_serveur, lire_cle)
+from magasin import ErreurMagasin, MagasinFaux, MagasinLocal
+from serveur import (CLE_BLOCAGE, CSV_GARES, DEMI_VOIE_M, DELAI_PRIM_S, FENETRE_NUIT, INTERVALLE_S, NOM_VERROU, NUIT_DEBUT_H, NUIT_FIN_H,
+                     PARIS, PLAFOND_JOUR, TRACE, VERROU_S, ErreurPrim, appeler_prim, jour_paris, Plafond, Releve, Releveur, calculer_trains,
+                     chaine_demo, charger_geo, construire_contexte, consolider_livraison, creer_serveur, lire_cle)
 
 T0 = datetime(2026, 11, 16, 10, 0, 0, tzinfo=timezone.utc)
 A, B, C = "STIF:StopArea:SP:1:", "STIF:StopArea:SP:2:", "STIF:StopArea:SP:3:"
@@ -82,6 +84,14 @@ class TestConsolider(unittest.TestCase):
 
 def releve_de(*trains, recu=0):
     return Releve(T0 + timedelta(seconds=recu), consolider_livraison(livraison(*trains), Memoire()))
+
+
+def _nourrir(lisseur, releve, cas):
+    """Comme `charge_utile` : chaque relevé reçu est avancé une seule fois dans le lisseur (identité du relevé)."""
+    vus = cas.__dict__.setdefault("_releves_vus", [])
+    if not any(v is releve for v in vus):
+        lisseur.avancer({ref: train for ref, (train, _r) in releve.trains.items()}, releve.recu)
+        vus.append(releve)
 
 
 class TestCalculerTrains(unittest.TestCase):
@@ -363,6 +373,8 @@ class TestLissageDansLeServeur(unittest.TestCase):
     """Étape 3 du plan séjour à quai : une révision de PRIM ne fait pas sauter le train (rerb/lissage.py)."""
 
     def trains(self, releve, t, lisseur=None):
+        if lisseur is not None:
+            _nourrir(lisseur, releve, self)
         return calculer_trains(releve, T0 + timedelta(seconds=t), distance, localiser, nom, lisseur=lisseur)
 
     def test_premiere_observation_identique_a_sans_lisseur(self):
@@ -371,7 +383,7 @@ class TestLissageDansLeServeur(unittest.TestCase):
 
     def test_revision_de_90_s_ne_fait_pas_sauter_le_train(self):
         r1 = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
-        r2 = releve_de(course("T1", [appel(A, 0, 60), appel(B, 390, 450)]))
+        r2 = releve_de(course("T1", [appel(A, 0, 60), appel(B, 390, 450)]), recu=140)   # reçu après r1 : la rampe part de 140 s
         l = Lisseur(tolerance_s=30.0, biais_s=0.0)
         self.trains(r1, 140, l)
         avant = self.trains(r1, 150)[0]["lat"]
@@ -383,7 +395,7 @@ class TestLissageDansLeServeur(unittest.TestCase):
 
     def test_l_incertitude_suit_le_train_lisse(self):
         r1 = releve_de(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
-        r2 = releve_de(course("T1", [appel(A, 0, 60), appel(B, 390, 450)]))
+        r2 = releve_de(course("T1", [appel(A, 0, 60), appel(B, 390, 450)]), recu=140)
         l = Lisseur(tolerance_s=30.0, biais_s=0.0)
         self.trains(r1, 140, l)
         t = self.trains(r2, 150, l)[0]
@@ -401,7 +413,7 @@ class TestLissageDansLeServeur(unittest.TestCase):
         dossier = tempfile.TemporaryDirectory()
         self.addCleanup(dossier.cleanup)
         f = Fausse([livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))])
-        releveur = Releveur(f, Plafond(Path(dossier.name) / "p.json", 1000, lambda: date(2026, 11, 16)), intervalle_s=120)
+        releveur = Releveur(f, Plafond(MagasinLocal(Path(dossier.name) / "p.json"), PLAFOND_JOUR, horloge=lambda: T0), intervalle_s=INTERVALLE_S)
         maintenant = T0 + timedelta(seconds=180)
         l = Lisseur(tolerance_s=30.0, biais_s=0.0)
         serveur = creer_serveur(releveur, distance, localiser, nom, port=0, horloge=lambda: maintenant, lisseur=l)
@@ -417,6 +429,8 @@ class TestEtiquettes(unittest.TestCase):
     """Étape 4 du plan : « périmé » est remplacé par deux faits distincts (décision de Mathis, 18/11)."""
 
     def trains(self, releve, t, lisseur=None):
+        if lisseur is not None:
+            _nourrir(lisseur, releve, self)
         return calculer_trains(releve, T0 + timedelta(seconds=t), distance, localiser, nom, lisseur=lisseur)[0]
 
     def test_donnees_anciennes_remplace_perime_sans_changer_le_seuil(self):
@@ -488,10 +502,10 @@ class TestPlafond(unittest.TestCase):
         self.dossier = tempfile.TemporaryDirectory()
         self.addCleanup(self.dossier.cleanup)
         self.fichier = Path(self.dossier.name) / "plafond.json"
-        self.jour = date(2026, 11, 16)
+        self.instant = T0                      # 16/11/2026 11:00 à Paris
 
     def plafond(self, maximum=3):
-        return Plafond(self.fichier, maximum, lambda: self.jour)
+        return Plafond(MagasinLocal(self.fichier), maximum, horloge=lambda: self.instant)
 
     def test_compte_et_refuse_au_maximum(self):
         p = self.plafond(3)
@@ -507,17 +521,38 @@ class TestPlafond(unittest.TestCase):
         p.compter()
         self.assertEqual(self.plafond(3).utilises, 2)
 
-    def test_repart_le_lendemain(self):
+    def test_repart_a_minuit_a_paris(self):
         p = self.plafond(1)
         p.compter()
         self.assertFalse(p.autorise())
-        self.jour = date(2026, 11, 17)
+        self.instant = datetime(2026, 11, 16, 22, 59, 59, tzinfo=timezone.utc)   # 23:59:59 à Paris : même jour
+        self.assertFalse(p.autorise())
+        self.instant = datetime(2026, 11, 16, 23, 0, 0, tzinfo=timezone.utc)     # 00:00 à Paris le 17 : nouveau jour
         self.assertTrue(p.autorise())
         self.assertEqual(p.utilises, 0)
+
+    def test_jour_de_paris_et_non_utc(self):
+        # 14/07/2026 22:30 UTC = 15/07 00:30 à Paris (été) : le compteur doit repartir de zéro, alors que l'UTC est encore le 14
+        self.assertEqual(jour_paris(datetime(2026, 7, 14, 22, 30, tzinfo=timezone.utc)), date(2026, 7, 15))
+        self.instant = datetime(2026, 7, 14, 21, 0, tzinfo=timezone.utc)         # 23:00 à Paris le 14
+        p = self.plafond(5)
+        p.compter()
+        p.compter()
+        self.instant = datetime(2026, 7, 14, 22, 30, tzinfo=timezone.utc)
+        self.assertEqual(p.utilises, 0)
+        p.compter()
+        self.assertEqual(p.utilises, 1)
 
     def test_fichier_illisible_repart_de_zero(self):
         self.fichier.write_text("pas du json")
         self.assertEqual(self.plafond(3).utilises, 0)
+
+    def test_ancien_format_du_fichier_est_repris(self):
+        # INVARIANT (magasin.py) : le fichier d'avant T2 `{"jour", "n"}` garde ses appels du jour, sinon le quota serait sous-estimé
+        self.fichier.write_text(json.dumps({"jour": "2026-11-16", "n": 7}))
+        self.assertEqual(self.plafond(1300).utilises, 7)
+        self.instant = datetime(2026, 11, 17, 10, 0, tzinfo=timezone.utc)
+        self.assertEqual(self.plafond(1300).utilises, 0)
 
 
 class Fausse:
@@ -597,11 +632,10 @@ class TestReleveur(unittest.TestCase):
     def setUp(self):
         self.dossier = tempfile.TemporaryDirectory()
         self.addCleanup(self.dossier.cleanup)
-        self.jour = date(2026, 11, 16)
 
-    def releveur(self, fausse, maximum=1000, intervalle=120):
-        plafond = Plafond(Path(self.dossier.name) / "p.json", maximum, lambda: self.jour)
-        return Releveur(fausse, plafond, intervalle_s=intervalle), plafond
+    def releveur(self, fausse, maximum=PLAFOND_JOUR, intervalle=INTERVALLE_S, fenetre_nuit=FENETRE_NUIT):
+        plafond = Plafond(MagasinFaux(), maximum, horloge=lambda: T0)
+        return Releveur(fausse, plafond, intervalle_s=intervalle, fenetre_nuit=fenetre_nuit), plafond
 
     def liv(self, ref="T1"):
         return livraison(course(ref, [appel(A, 0, 60), appel(B, 300, 360)]))
@@ -609,10 +643,10 @@ class TestReleveur(unittest.TestCase):
     def test_exceptions_inattendues_donnent_une_erreur_pas_un_plantage(self):
         import http.client
         for exc in (TypeError("x"), AttributeError("x"), http.client.IncompleteRead(b"")):
-            r, _ = self.releveur(Fausse([exc]))
+            r, p = self.releveur(Fausse([exc]))
             self.assertEqual(r.actualiser(T0), "erreur", repr(exc))
             self.assertIsNotNone(r.derniere_erreur)
-            self.assertFalse(r._verrou.locked())      # le verrou est bien relâché
+            self.assertIsNotNone(p.magasin.prendre_verrou(NOM_VERROU, VERROU_S))   # le verrou est bien relâché
 
     def test_premier_appel_remplit_le_cache(self):
         f = Fausse([self.liv()])
@@ -626,9 +660,9 @@ class TestReleveur(unittest.TestCase):
         f = Fausse([self.liv(), self.liv()])
         r, _ = self.releveur(f)
         r.actualiser(T0)
-        self.assertEqual(r.actualiser(T0 + timedelta(seconds=119)), "trop tôt")
+        self.assertEqual(r.actualiser(T0 + timedelta(seconds=INTERVALLE_S - 1)), "trop tôt")
         self.assertEqual(f.appels, 1)
-        self.assertEqual(r.actualiser(T0 + timedelta(seconds=120)), "ok")
+        self.assertEqual(r.actualiser(T0 + timedelta(seconds=INTERVALLE_S)), "ok")
         self.assertEqual(f.appels, 2)
 
     def test_plafond_atteint_aucun_appel_cache_conserve(self):
@@ -687,6 +721,167 @@ class TestReleveur(unittest.TestCase):
         self.assertIsNone(r.releve)
 
 
+def heure_paris(annee, mois, jour, h, mi=0, s=0):
+    """Instant UTC d'une heure civile de Paris, converti par zoneinfo (jamais calculé à la main)."""
+    return datetime(annee, mois, jour, h, mi, s, tzinfo=PARIS).astimezone(timezone.utc)
+
+
+def releveur_de_test(fausse, maximum=PLAFOND_JOUR, intervalle=INTERVALLE_S, fenetre_nuit=FENETRE_NUIT):
+    plafond = Plafond(MagasinFaux(), maximum, horloge=lambda: T0)
+    return Releveur(fausse, plafond, intervalle_s=intervalle, fenetre_nuit=fenetre_nuit), plafond
+
+
+class TestNuitIntervallePlafond(unittest.TestCase):
+    """T2 : coupure 01:00-05:00 (Paris), intervalle 60 s, plafond 1 300 par jour (date de Paris)."""
+
+    def test_constantes_de_production(self):
+        self.assertEqual((INTERVALLE_S, PLAFOND_JOUR, NUIT_DEBUT_H, NUIT_FIN_H, DELAI_PRIM_S, VERROU_S), (60, 1300, 1, 5, 20, 35))
+
+    def test_le_verrou_survit_au_delai_prim(self):
+        # INVARIANT (serveur.py) : sinon deux appels PRIM partent en parallèle et le plafond est faux
+        self.assertGreater(VERROU_S, DELAI_PRIM_S + 10)
+        m = MagasinFaux()
+        m.prendre_verrou(NOM_VERROU, VERROU_S)
+        m.avancer(DELAI_PRIM_S)
+        self.assertIsNone(m.prendre_verrou(NOM_VERROU, VERROU_S))            # pendant l'appel le plus long : toujours pris
+        m.avancer(VERROU_S - DELAI_PRIM_S)
+        self.assertIsNotNone(m.prendre_verrou(NOM_VERROU, VERROU_S))         # expiré : repris
+
+    def test_bornes_de_la_nuit_a_paris(self):
+        f = Fausse([livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))] * 2)
+        r, _ = releveur_de_test(f)
+        self.assertEqual(r.actualiser(heure_paris(2026, 11, 17, 0, 59, 59)), "ok")
+        self.assertEqual(r.actualiser(heure_paris(2026, 11, 17, 1, 0, 0)), "nuit")
+        self.assertEqual(r.actualiser(heure_paris(2026, 11, 17, 4, 59, 59)), "nuit")
+        self.assertEqual(r.actualiser(heure_paris(2026, 11, 17, 5, 0, 0)), "ok")
+        self.assertEqual(f.appels, 2)
+
+    def test_changements_d_heure(self):
+        r, _ = releveur_de_test(Fausse([]))
+        cas = (
+            (datetime(2026, 10, 24, 23, 0, tzinfo=timezone.utc), 1, True),       # 25/10 01:00 CEST : coupure
+            (datetime(2026, 10, 24, 22, 59, 59, tzinfo=timezone.utc), 0, False),  # 25/10 00:59:59 CEST
+            (datetime(2026, 10, 25, 3, 59, 59, tzinfo=timezone.utc), 4, True),    # 25/10 04:59:59 CET (heure d'hiver)
+            (datetime(2026, 10, 25, 4, 0, tzinfo=timezone.utc), 5, False),        # 25/10 05:00 CET
+            (datetime(2027, 3, 28, 0, 0, tzinfo=timezone.utc), 1, True),          # 28/03 01:00 CET, avant le passage à 02:00
+            (datetime(2027, 3, 27, 23, 59, 59, tzinfo=timezone.utc), 0, False),   # 28/03 00:59:59 CET
+            (datetime(2027, 3, 28, 2, 59, 59, tzinfo=timezone.utc), 4, True),     # 28/03 04:59:59 CEST
+            (datetime(2027, 3, 28, 3, 0, tzinfo=timezone.utc), 5, False),         # 28/03 05:00 CEST
+        )
+        for instant, heure, attendu in cas:
+            with self.subTest(instant=instant.isoformat()):
+                self.assertEqual(instant.astimezone(PARIS).hour, heure)   # garde-fou sur les calculs d'instants
+                self.assertEqual(r.est_nuit(instant), attendu)
+
+    def test_nuit_garde_le_releve_sans_appel_ni_comptage(self):
+        f = Fausse([livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))] * 2)
+        r, p = releveur_de_test(f)
+        veille = heure_paris(2026, 11, 16, 23, 0)
+        self.assertEqual(r.actualiser(veille), "ok")
+        nuit = heure_paris(2026, 11, 17, 2, 0)
+        self.assertEqual(r.actualiser(nuit), "nuit")
+        self.assertEqual(f.appels, 1)
+        self.assertEqual(p.compte(nuit), 0)                  # le compteur du 17 n'a pas bougé
+        self.assertEqual(r.releve.recu, veille)              # le relevé de la veille reste servi, son âge croît
+        self.assertEqual(r.actualiser(heure_paris(2026, 11, 17, 5, 0)), "ok")
+
+    def test_demo_sans_coupure(self):
+        r, _ = releveur_de_test(Fausse([livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))]), fenetre_nuit=None)
+        self.assertEqual(r.actualiser(heure_paris(2026, 11, 17, 2, 0)), "ok")
+
+    def test_intervalle_de_60_secondes(self):
+        f = Fausse([livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))] * 2)
+        r, _ = releveur_de_test(f, fenetre_nuit=None)
+        self.assertEqual(r.actualiser(T0), "ok")
+        self.assertEqual(r.actualiser(T0 + timedelta(seconds=59)), "trop tôt")
+        self.assertEqual(r.actualiser(T0 + timedelta(seconds=60)), "ok")
+
+    def test_plafond_de_1300_appels_par_jour(self):
+        # 00:00 à Paris : 1 301 tentatives à 60 s d'écart tiennent dans le même jour civil de Paris
+        debut = heure_paris(2026, 11, 16, 0, 0)
+        f = Fausse([livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)])) for _ in range(PLAFOND_JOUR + 1)])
+        r, p = releveur_de_test(f, fenetre_nuit=None)
+        for n in range(PLAFOND_JOUR):
+            self.assertEqual(r.actualiser(debut + timedelta(seconds=INTERVALLE_S * n)), "ok", n)
+        self.assertEqual(r.actualiser(debut + timedelta(seconds=INTERVALLE_S * PLAFOND_JOUR)), "plafond")
+        self.assertEqual(f.appels, PLAFOND_JOUR)
+        self.assertEqual(p.compte(debut), PLAFOND_JOUR)
+
+    def test_service_nuit_dans_trains_et_statut(self):
+        f = Fausse([livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))])
+        r, _ = releveur_de_test(f)
+        instant = {"t": heure_paris(2026, 11, 17, 0, 30)}
+        serveur = creer_serveur(r, distance, localiser, nom, port=0, horloge=lambda: instant["t"])
+        threading.Thread(target=serveur.serve_forever, daemon=True).start()
+        self.addCleanup(serveur.server_close)
+        self.addCleanup(serveur.shutdown)
+        base = f"http://127.0.0.1:{serveur.server_address[1]}"
+        de_jour = json.loads(urllib.request.urlopen(base + "/trains").read())
+        self.assertIsNone(de_jour["service"])
+        self.assertEqual(len(de_jour["trains"]), 1)
+        instant["t"] = heure_paris(2026, 11, 17, 2, 0)
+        de_nuit = json.loads(urllib.request.urlopen(base + "/trains").read())
+        self.assertEqual(de_nuit["service"], "nuit")
+        self.assertEqual(len(de_nuit["trains"]), 1)          # cache gardé pendant la coupure
+        statut = json.loads(urllib.request.urlopen(base + "/statut").read())
+        self.assertEqual(statut["service"], "nuit")
+        self.assertNotIn("trains", statut)
+        self.assertEqual(f.appels, 1)
+
+
+class TestMagasinDansLeReleveur(unittest.TestCase):
+    """T2 : l'état partagé (verrou, blocage, compteur) passe par le magasin ; une panne = aucun appel."""
+
+    def test_panne_du_magasin_aucun_appel_releve_garde(self):
+        f = Fausse([livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))] * 2)
+        r, p = releveur_de_test(f, fenetre_nuit=None)
+        self.assertEqual(r.actualiser(T0), "ok")
+        p.magasin.panne = True
+        self.assertEqual(r.actualiser(T0 + timedelta(seconds=INTERVALLE_S)), "magasin")
+        self.assertEqual(f.appels, 1)
+        self.assertEqual(r.releve.recu, T0)
+        self.assertIn("magasin", r.derniere_erreur)
+        p.magasin.panne = False
+        self.assertEqual(p.compte(T0), 1)                    # rien n'a été compté pendant la panne
+
+    def test_blocage_ecrit_par_une_copie_lu_par_l_autre(self):
+        magasin = MagasinFaux()
+        plafond = Plafond(magasin, PLAFOND_JOUR, horloge=lambda: T0)
+        f1, f2 = Fausse([ErreurPrim("HTTP 401", 401)]), Fausse([livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))])
+        copie1 = Releveur(f1, plafond, fenetre_nuit=None)
+        copie2 = Releveur(f2, plafond, fenetre_nuit=None)
+        self.assertEqual(copie1.actualiser(T0), "erreur")
+        self.assertEqual(copie2.actualiser(T0 + timedelta(hours=3)), "bloqué")
+        self.assertTrue(copie2.bloque)
+        self.assertEqual(f2.appels, 0)
+        self.assertIsNotNone(magasin.lire(CLE_BLOCAGE))
+
+    def test_deux_copies_un_seul_appel_pour_deux_requetes_simultanees(self):
+        magasin = MagasinFaux()
+        plafond = Plafond(magasin, PLAFOND_JOUR, horloge=lambda: T0)
+        appels, resultats = [], []
+
+        def fetch_copie1():
+            appels.append("copie1")
+            resultats.append(copie2.actualiser(T0))         # la requête de l'autre copie arrive pendant l'appel
+            return livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
+
+        def fetch_copie2():
+            appels.append("copie2")
+            return livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))
+        copie1 = Releveur(fetch_copie1, plafond, fenetre_nuit=None)
+        copie2 = Releveur(fetch_copie2, plafond, fenetre_nuit=None)
+        self.assertEqual(copie1.actualiser(T0), "ok")
+        self.assertEqual(resultats, ["occupé"])
+        self.assertEqual(appels, ["copie1"])
+
+    def test_magasin_en_panne_sur_le_blocage_ne_plante_pas_le_serveur(self):
+        r, p = releveur_de_test(Fausse([]), fenetre_nuit=None)
+        p.magasin.panne = True
+        self.assertEqual(r.actualiser(T0), "magasin")
+        self.assertFalse(r.bloque)
+
+
 class TestLireCle(unittest.TestCase):
     def test_lit_la_cle(self):
         with tempfile.TemporaryDirectory() as d:
@@ -712,9 +907,9 @@ class TestHttp(unittest.TestCase):
         self.dossier = tempfile.TemporaryDirectory()
         self.addCleanup(self.dossier.cleanup)
         f = Fausse([livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))])
-        plafond = Plafond(Path(self.dossier.name) / "p.json", 1000, lambda: date(2026, 11, 16))
+        plafond = Plafond(MagasinLocal(Path(self.dossier.name) / "p.json"), PLAFOND_JOUR, horloge=lambda: T0)
         self.fausse = f
-        self.releveur = Releveur(f, plafond, intervalle_s=120)
+        self.releveur = Releveur(f, plafond, intervalle_s=INTERVALLE_S)
         self.horloge = lambda: T0 + timedelta(seconds=180)
         self.web = Path(self.dossier.name) / "web"
         (self.web / "vendor").mkdir(parents=True)
@@ -733,7 +928,7 @@ class TestHttp(unittest.TestCase):
                 "LineRef": {"value": "STIF:Line::C01743:"}, "FramedVehicleJourneyRef": {"DatedVehicleJourneyRef": "T1"},
                 "DestinationName": [{"value": "Aéroport CDG"}], "VehicleJourneyName": [{"value": "EAGE09"}],
                 "MonitoredCall": {"VehicleAtStop": False, "ExpectedDepartureTime": h(400), "AimedDepartureTime": h(300)}}}]}]}
-        self.gares = ReleveurGares(fetch_gare, Plafond(Path(self.dossier.name) / "pg.json", 100, lambda: date(2026, 11, 16)))
+        self.gares = ReleveurGares(fetch_gare, Plafond(MagasinLocal(Path(self.dossier.name) / "pg.json"), 100, horloge=lambda: T0))
         self.serveur = creer_serveur(self.releveur, distance, localiser, nom, port=0, horloge=self.horloge,
                                      racine_web=self.web, geo=self.geo, releveur_gares=self.gares,
                                      gares={"58774": "Massy - Palaiseau", "47940": "Massy - Verrières"})
@@ -758,7 +953,7 @@ class TestHttp(unittest.TestCase):
         self.assertEqual([t["course"] for t in corps["trains"]], ["T1"])
         # cache vide : la requête déclenche l'appel, au « maintenant » de l'horloge (T0 + 180 s)
         self.assertEqual(corps["releve_recu"], (T0 + timedelta(seconds=180)).isoformat())
-        self.assertEqual(corps["plafond"], {"utilises": 1, "maximum": 1000})
+        self.assertEqual(corps["plafond"], {"utilises": 1, "maximum": PLAFOND_JOUR})
         self.assertIsNone(corps["erreur"])
 
     def test_trains_sans_releve(self):
