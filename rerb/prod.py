@@ -15,13 +15,14 @@ from gare import ReleveurGares
 from magasin import ErreurMagasin
 from magasin_upstash import MagasinUpstash
 from relayeur import Relayeur
-from serveur import (CLE_BLOCAGE, CSV_GARES, DELAI_PRIM_S, EN_TETES, FENETRE_NUIT, PLAFOND_JOUR, STATUTS_CLE_REFUSEE, TABLE_DUREES, TRACE,
+from serveur import (CLE_BLOCAGE, CSV_GARES, DELAI_PRIM_S, EN_TETES, FENETRE_NUIT, PLAFOND_JOUR, TABLE_DUREES, TRACE,
                      URL_PRIM_ET, URL_PRIM_SM_GARE, ErreurPrim, _charger, appeler_prim, calculer_trains, construire_contexte,
                      corps_trains, duree_blocage, est_nuit, ref_gare)
 
 CACHE_TRAINS = "public, s-maxage=5, stale-while-revalidate=10"   # décision T5 : CDN 5 s, requête locale 20 s (relayeur)
 CACHE_GARE = "public, s-maxage=60"                               # une gare : une réponse PRIM au plus par minute et par gare
 CACHE_SANS_CACHE = "no-store"
+STATUTS_ECRITS_PARTAGES = (401, 403)   # /gare écrit le blocage partagé pour ces statuts seulement (ticket T5b)
 NOMS_URL = ("UPSTASH_REDIS_REST_URL", "KV_REST_API_URL")
 NOMS_JETON = ("UPSTASH_REDIS_REST_TOKEN", "KV_REST_API_TOKEN")
 
@@ -35,9 +36,10 @@ def _premier(env, noms):
 
 
 def ecrire_blocage(magasin, statut, maintenant):
-    """Bloque tous les appels PRIM pour `duree_blocage(statut)` secondes, partagé entre les copies. Panne du magasin : ignorée
+    """Bloque tous les appels PRIM pour `duree_blocage(statut)` secondes, partagé entre les copies. Seul 401/403 s'écrit (une
+    écriture de plus par 429 ne sert à rien : le blocage de 15 min de /gare reste local à la copie). Panne du magasin : ignorée
     (la réponse en erreur est servie quand même ; le blocage local de la copie reste en place)."""
-    if magasin is None or statut not in STATUTS_CLE_REFUSEE:
+    if magasin is None or statut not in STATUTS_ECRITS_PARTAGES:
         return
     duree = duree_blocage(statut)
     try:
@@ -61,6 +63,7 @@ class Services:
         if self.cle is None:
             manquant.append("clé PRIM absente (PRIM_API_KEY) : aucun appel PRIM")
         self.erreur_configuration = " ; ".join(manquant) or None
+        self.erreur_cle = None if self.cle else "clé PRIM absente (PRIM_API_KEY) : aucun appel PRIM"
         self.relayeur = Relayeur(self.magasin, self._fetch_trains) if self.magasin is not None else None
         self.releveur_gares = ReleveurGares(self._fetch_gare, None)   # pas de plafond propre : liste blanche + CDN (spec déploiement)
         self.gares = {numero: gare.name for numero, gare in _charger(CSV_GARES, TRACE)[0].items()}
@@ -91,25 +94,18 @@ def reponse_trains(svc):
 
 
 def reponse_gare(svc, ref):
-    """`ref` doit être une gare de la liste blanche (`ref_gare`). Ordre : configuration, nuit, blocage écrit, clé, appel."""
+    """`ref` doit être une gare de la liste blanche (`ref_gare`). Ordre : nuit, clé, appel. Aucune lecture ni écriture
+    Upstash sauf l'écriture du blocage 401/403 (ecrire_blocage) : /gare ne dépend pas du stockage (décision T5b)."""
     maintenant = svc.horloge()
 
     def corps(statut, passages=(), age_s=None, erreur=None, bloque=False):
         return {"ref": ref, "gare": svc.gares[ref], "statut": statut, "passages": list(passages), "age_s": age_s,
                 "erreur": erreur, "bloque": bloque, "demo": False, "plafond": None}
 
-    if svc.magasin is None:
-        return corps("magasin", erreur=svc.erreur_configuration)
     if est_nuit(maintenant, FENETRE_NUIT):
         return corps("nuit")
-    try:
-        blocage = svc.magasin.lire(CLE_BLOCAGE)
-    except ErreurMagasin as erreur:
-        return corps("magasin", erreur=f"magasin indisponible ({erreur})")
-    if blocage is not None:
-        return corps("bloqué", bloque=True, erreur="PRIM bloqué : aucun appel avant l'échéance du blocage")
     if svc.cle is None:
-        return corps("erreur", erreur=svc.erreur_configuration)
+        return corps("erreur", erreur=svc.erreur_cle)
     resultat = svc.releveur_gares.passages(f"STIF:StopArea:SP:{ref}:", maintenant)
     return corps(resultat["statut"], resultat["passages"], resultat["age_s"], resultat["erreur"], svc.releveur_gares.bloque)
 

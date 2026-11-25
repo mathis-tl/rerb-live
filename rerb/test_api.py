@@ -239,38 +239,89 @@ class TestGare(unittest.TestCase):
         self.assertEqual(corps["statut"], "nuit")
         self.assertEqual(banc.appels, [])
 
-    def test_blocage_ecrit_par_trains_aucun_appel(self):
-        self.banc.faux.valeurs["rerb:blocage"] = (json.dumps({"statut": 429}), None)
-        _, _, corps = self.local.get(f"/?ref={REF}")
-        self.assertEqual(corps["statut"], "bloqué")
-        self.assertEqual(self.banc.appels, [])
-
-    def test_magasin_en_panne_aucun_appel(self):
-        self.banc.faux.panne = "http500"
-        _, _, corps = self.local.get(f"/?ref={REF}")
-        self.assertEqual(corps["statut"], "magasin")
-        self.assertEqual(self.banc.appels, [])
-
-    def test_stockage_non_configure_aucun_appel(self):
-        banc = Banc()
+    def _gare_neuve(self, banc=None, env=ENV_FICTIF):
+        """Une copie de /gare neuve (état de module propre), branchée sur `banc` ou sur un banc neuf."""
+        banc = banc or Banc()
         module = charger_api("gare")
-        module._services = banc.services(env={"PRIM_API_KEY": CLE_PRIM_FICTIVE})
+        module._services = banc.services(env)
         local = Local(module.handler)
         self.addCleanup(local.fermer)
-        _, _, corps = local.get(f"/?ref={REF}")
-        self.assertEqual(corps["statut"], "magasin")
-        self.assertEqual(banc.appels, [])
+        return banc, local
 
-    def test_cle_refusee_ecrit_le_blocage_avec_sa_duree(self):
-        self.banc.echec = ErreurPrim("HTTP 401", 401)
+    def test_gare_sans_panne_aucune_commande_upstash(self):
+        _, _, corps = self.local.get(f"/?ref={REF}")
+        self.assertEqual(corps["statut"], "ok")
+        self.assertEqual(self.banc.faux.commandes, [])
+
+    def test_cache_60_secondes_sans_commande_upstash(self):
+        self.local.get(f"/?ref={REF}")
+        self.banc.t = 30.0
+        self.local.get(f"/?ref={REF}")
+        self.assertEqual(len(self.banc.appels), 1)
+        self.banc.t = 61.0
+        self.local.get(f"/?ref={REF}")
+        self.assertEqual(len(self.banc.appels), 2)
+        self.assertEqual(self.banc.faux.commandes, [])
+
+    def test_blocage_ecrit_par_trains_ignore_par_gare(self):
+        """/gare ne lit plus Upstash : un blocage posé par /trains n'arrête pas /gare (décision de Mathis, 25/11)."""
+        self.banc.faux.valeurs["rerb:blocage"] = (json.dumps({"statut": 429}), None)
+        _, _, corps = self.local.get(f"/?ref={REF}")
+        self.assertEqual(corps["statut"], "ok")
+        self.assertEqual(len(self.banc.appels), 1)
+        self.assertEqual(self.banc.faux.commandes, [])
+
+    def test_magasin_en_panne_ne_bloque_pas_gare(self):
+        for panne in ("delai", "http500", "json", "forme"):
+            with self.subTest(panne=panne):
+                banc, local = self._gare_neuve()
+                banc.faux.panne = panne
+                _, _, corps = local.get(f"/?ref={REF}")
+                self.assertEqual(corps["statut"], "ok")
+                self.assertEqual(len(banc.appels), 1)
+                self.assertEqual(banc.faux.commandes, [])
+
+    def test_stockage_non_configure_ne_bloque_pas_gare(self):
+        banc, local = self._gare_neuve(env={"PRIM_API_KEY": CLE_PRIM_FICTIVE})
+        _, _, corps = local.get(f"/?ref={REF}")
+        self.assertEqual(corps["statut"], "ok")
+        self.assertEqual(len(banc.appels), 1)
+
+    def test_429_n_ecrit_rien_et_bloque_15_minutes_en_memoire(self):
+        self.banc.echec = ErreurPrim("HTTP 429", 429)
         _, _, corps = self.local.get(f"/?ref={REF}")
         self.assertEqual(corps["statut"], "erreur")
-        self.assertIsNotNone(self.banc.faux.valeurs["rerb:blocage"][1], "le blocage doit avoir une durée de vie")
+        self.assertEqual(self.banc.faux.commandes, [])
+        self.assertNotIn("rerb:blocage", self.banc.faux.valeurs)
         self.banc.echec = None
-        self.banc.t = 3600.0
+        self.banc.t = 14 * 60.0
         _, _, corps = self.local.get(f"/?ref={REF}")
         self.assertEqual(corps["statut"], "bloqué")
         self.assertEqual(len(self.banc.appels), 1)
+        self.banc.t = 15 * 60.0 + 1
+        _, _, corps = self.local.get(f"/?ref={REF}")
+        self.assertEqual(corps["statut"], "ok")
+        self.assertEqual(len(self.banc.appels), 2)
+
+    def test_401_et_403_ecrivent_un_blocage_et_bloquent_6_heures(self):
+        for statut in (401, 403):
+            with self.subTest(statut=statut):
+                banc, local = self._gare_neuve()
+                banc.echec = ErreurPrim(f"HTTP {statut}", statut)
+                _, _, corps = local.get(f"/?ref={REF}")
+                self.assertEqual(corps["statut"], "erreur")
+                ecritures = [c for c in banc.faux.commandes if c[0].upper() == "SET" and c[1] == "rerb:blocage"]
+                self.assertEqual(len(ecritures), 1)
+                self.assertIsNotNone(banc.faux.valeurs["rerb:blocage"][1], "le blocage doit avoir une durée de vie")
+                banc.echec = None
+                banc.t = 3600.0
+                _, _, corps = local.get(f"/?ref={REF}")
+                self.assertEqual(corps["statut"], "bloqué")
+                self.assertEqual(len(banc.appels), 1)
+                banc.t = 6 * 3600.0 + 1
+                _, _, corps = local.get(f"/?ref={REF}")
+                self.assertEqual(corps["statut"], "ok")
+                self.assertEqual(len(banc.appels), 2)
 
 
 class TestSante(unittest.TestCase):

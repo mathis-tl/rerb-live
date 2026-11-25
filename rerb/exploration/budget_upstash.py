@@ -1,12 +1,22 @@
-"""Budget Upstash de T5 : taille de l'état stocké (rejeu des relevés réels de Palaiseau) et commandes par jour / par mois.
+"""Budget Upstash (T5b) : simulation de journées actives, relevés réels de Palaiseau rejoués.
 
-Exploration, pas un test. Lit `~/rerb-data-palaiseau-20261118` (hors dépôt). N'appelle ni PRIM ni Upstash.
-Hypothèses, affichées ci-dessous et à confirmer en production :
-• trafic continu 24 h, une copie active lit le magasin toutes les CACHE_LOCAL_S (cache local du relayeur) ;
-• un rafraîchissement PRIM par INTERVALLE_S hors coupure de nuit, partagé entre les copies (verrou) ;
-• /gare : une lecture du blocage à chaque échec du cache CDN (s-maxage 60 s), une URL par gare, une seule zone de cache.
-Usage (depuis rerb/) : python3 exploration/budget_upstash.py
+Exploration, pas un test. Lit `~/rerb-data-palaiseau-20261118` (hors dépôt). Aucun réseau : FauxUpstash compte les commandes et les
+octets (envoyés + reçus) ; PRIM est rejoué (le relevé suivant, décalé à l'instant de l'appel) ; horloge simulée.
+
+Scénarios (décision de Mathis du 25/11 : base = 10 visiteurs au maximum par jour, pas de promotion) :
+• BASE : 10 visiteurs × 30 min, bout à bout = 5 h actives par jour, 1 et 3 copies. C'est le critère d'acceptation de T5b.
+• TÉMOIN : 50 visiteurs (ancienne base du ticket), 20 h actives par jour, 3 copies. Gardé pour traçabilité ; non atteint.
+
+Hypothèses communes :
+• une requête au relayeur toutes les 5 s pendant la fenêtre active (pire cas du CDN, s-maxage=5), en tour de rôle entre les copies ;
+  c'est un plafond en trafic continu : une actualisation n'a lieu que si quelqu'un demande la page ;
+• pas de coupure de nuit (fenetre_nuit None) ;
+• /gare ne lit pas Upstash : aucune commande ajoutée par les visiteurs de /gare ;
+• un mois = 30 jours, chaque jour identique.
+
+Usage (depuis rerb/) : python3 exploration/budget_upstash.py   (plusieurs minutes)
 """
+import functools
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -15,98 +25,103 @@ RERB = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RERB))
 sys.path.insert(0, str(RERB / "exploration"))
 
-from lissage import Lisseur  # noqa: E402
-from magasin import compresser_json  # noqa: E402
-from memoire import TAILLE_MAX_OCTETS, Memoire  # noqa: E402
-from relayeur import CACHE_LOCAL_S, CLE_LISSEUR, CLE_MEMOIRE, CLE_RELEVE  # noqa: E402
-from serveur import INTERVALLE_S, Releve, consolider_livraison  # noqa: E402
-from test_relayeur import DONNEES_PALAISEAU, _decaler  # noqa: E402
+from magasin_upstash import MagasinUpstash  # noqa: E402
+from relayeur import Relayeur  # noqa: E402
+from test_faux_upstash import JETON_FICTIF, FauxUpstash  # noqa: E402
+from test_relayeur import DONNEES_PALAISEAU, URL_FICTIVE, _decaler  # noqa: E402
+from test_serveur import T0  # noqa: E402
 
 import rejouer_palaiseau  # noqa: E402
 
-CYCLES = 10                       # 2 h réelles répétées : ~20 h, comme le test de purge
+PAS_REQUETE_S = 5
 JOURS_PAR_MOIS = 30
-LIMITE_COMMANDES = 500_000        # Upstash, par mois
-LIMITE_OCTETS = 10 * 10**9        # 10 Go par mois
-SEUIL_ALERTE = 0.6                # alerte à 60 % de chaque limite (décision T5)
-NB_GARES = 47                     # liste blanche de /gare
-MINUTES_PAR_JOUR = 24 * 60
-MINUTES_UTILES = MINUTES_PAR_JOUR - 4 * 60   # coupure de nuit 01:00-05:00 : aucun rafraîchissement
-# Commandes en plus de la lecture du cache local, par rafraîchissement : SET NX, MGET sous verrou, GET compteur, INCR, MSET, EVAL.
-COMMANDES_PAR_RAFRAICHISSEMENT = 6
-OCTETS_PAR_RAFRAICHISSEMENT = 2   # MGET sous verrou + MSET de l'état (lectures/écritures comptées en octets, approximation)
+LIMITE_COMMANDES = 500_000
+LIMITE_OCTETS = 10 * 10**9
+
+# Scénario de base (critère de T5b, décidé le 25/11)
+VISITEURS_BASE = 10
+DUREE_VISITE_MIN = 30
+HEURES_BASE = VISITEURS_BASE * DUREE_VISITE_MIN / 60   # 5 h, visites bout à bout (pire cas de répartition)
+COPIES_BASE = (1, 3)
+CIBLE_COMMANDES_MOIS = 250_000        # ticket T5b : 50 % de 500 000 commandes par mois
+CIBLE_OCTETS_MOIS = 6 * 10**9         # ticket T5b : 60 % de 10 Go de transfert par mois
+
+# Témoin (ancienne base du ticket, non retenue)
+VISITEURS_TEMOIN, HEURES_TEMOIN, COPIES_TEMOIN = 50, 20, 3
 
 
-def mesurer(sequence):
-    """sequence : [(instant, livraison)] dans l'ordre. Rejoue le relayeur (consolidation, purge, lissage) et mesure les valeurs
-    qu'il écrirait dans Upstash : taille gzip+base64 de chaque clé, et taille brute de la mémoire (garde de TAILLE_MAX_OCTETS)."""
-    memoire, lisseur = Memoire(), Lisseur()
-    pire = {"total": 0, CLE_RELEVE: 0, CLE_LISSEUR: 0, CLE_MEMOIRE: 0}
-    brute_max, finale = 0, None
-    for instant, livraison in sequence:
-        trains = consolider_livraison(livraison, memoire)
-        memoire.purger(instant)
-        lisseur.avancer({ref: train for ref, (train, _retards) in trains.items()}, instant)
-        valeurs = {
-            CLE_RELEVE: len(compresser_json(Releve(instant, trains).exporter())),
-            CLE_LISSEUR: len(compresser_json(lisseur.exporter())),
-            CLE_MEMOIRE: len(compresser_json(memoire.exporter())),
-        }
-        valeurs["total"] = sum(valeurs.values())
-        for cle, octets in valeurs.items():
-            pire[cle] = max(pire[cle], octets)
-        brute_max = max(brute_max, memoire.taille_export())
-        finale = valeurs
-    return pire, finale, brute_max
+@functools.lru_cache(maxsize=None)
+def _rejeux():
+    """Relevés réels (instant de réception UTC, livraison PRIM), lus une seule fois."""
+    return rejouer_palaiseau.lire_releves(DONNEES_PALAISEAU)
 
 
-def budget(visiteurs, copies):
-    """Commandes Upstash par mois pour `visiteurs` (visiteurs simultanés) et `copies` copies de fonction actives toute la journée."""
-    lectures_trains = (86400 // CACHE_LOCAL_S) * copies                  # une lecture par copie et par CACHE_LOCAL_S
-    rafraichissements = MINUTES_UTILES * 60 // INTERVALLE_S              # un par INTERVALLE_S, partagé
-    commandes_trains = lectures_trains + rafraichissements * COMMANDES_PAR_RAFRAICHISSEMENT
-    gares_distinctes = min(visiteurs, NB_GARES)                          # pire cas : chaque visiteur sur une gare différente
-    lectures_gare = gares_distinctes * MINUTES_PAR_JOUR                  # une lecture du blocage par échec du cache CDN (60 s)
+def simuler(copies, heures, pas_s=PAS_REQUETE_S):
+    """Une journée de `heures` heures actives avec `copies` copies du relayeur sur un magasin partagé.
+    -> {"commandes", "octets" (envoyés + reçus), "appels_prim", "requetes", "tailles" (octets stockés par clé, en fin de journée)}."""
+    releves = _rejeux()
+    t = {"s": 0.0}   # horloge simulée : secondes depuis T0
+    faux = FauxUpstash(lambda: t["s"])
+    magasin = MagasinUpstash(URL_FICTIVE, JETON_FICTIF, http=faux.http)
+    appels = {"n": 0}
+
+    def prim():
+        """Le relevé suivant, horodatages décalés à l'instant de l'appel (les courses restent distinctes à chaque appel)."""
+        maintenant = T0 + timedelta(seconds=t["s"])
+        n = appels["n"]
+        appels["n"] += 1
+        instant, livraison = releves[n % len(releves)]
+        return _decaler(livraison, f"#{n}", maintenant - instant)
+
+    relayeurs = [Relayeur(magasin, prim, fenetre_nuit=None) for _ in range(copies)]
+    requetes = 0
+    for i, s in enumerate(range(0, int(heures * 3600), pas_s)):
+        t["s"] = float(s)
+        relayeurs[i % copies].lire(T0 + timedelta(seconds=s))
+        requetes += 1
     return {
-        "trains_jour": commandes_trains,
-        "gare_jour": lectures_gare,
-        "mois": (commandes_trains + lectures_gare) * JOURS_PAR_MOIS,
-        "rafraichissements_jour": rafraichissements,
-        "lectures_trains_jour": lectures_trains,
+        "commandes": len(faux.commandes),
+        "octets": faux.octets_envoyes + faux.octets_recus,
+        "appels_prim": appels["n"],
+        "requetes": requetes,
+        "tailles": {cle: len(texte) for cle, (texte, _expiration) in faux.valeurs.items()},
     }
+
+
+def par_mois(journee):
+    return journee["commandes"] * JOURS_PAR_MOIS, journee["octets"] * JOURS_PAR_MOIS
+
+
+def _ligne(libelle, j):
+    cmd, octets = par_mois(j)
+    return (f"{libelle:>22} {j['appels_prim']:>10,} {j['commandes']:>12,} {cmd:>14,} {100 * cmd / LIMITE_COMMANDES:>11.0f} % "
+            f"{octets / 10**9:>9.2f} {100 * octets / LIMITE_OCTETS:>10.0f} %")
 
 
 def main():
     if not (DONNEES_PALAISEAU / "prim_estimated_timetable").is_dir():
         print(f"Données absentes : {DONNEES_PALAISEAU}")
         return 1
-    releves = rejouer_palaiseau.lire_releves(DONNEES_PALAISEAU)
-    duree = releves[-1][0] - releves[0][0] + timedelta(minutes=1)
-    print(f"Rejeu : {len(releves)} relevés réels, {duree} par cycle, {CYCLES} cycles")
+    print(f"Rejeu : {len(_rejeux())} relevés réels ; une requête toutes les {PAS_REQUETE_S} s pendant la fenêtre active.\n")
+    print(f"{'scénario':>22} {'PRIM/jour':>10} {'commandes/j':>12} {'commandes/mois':>14} {'% de 500 000':>12} "
+          f"{'Go/mois':>9} {'% de 10 Go':>11}")
 
-    pire_reel, finale_reel, brute_reel = mesurer(releves)
-    sequence = [(instant + duree * c, _decaler(sd, f"#{c}", duree * c)) for c in range(CYCLES) for instant, sd in releves]
-    pire, finale, brute = mesurer(sequence)
+    base = {c: simuler(c, HEURES_BASE) for c in COPIES_BASE}
+    for c, j in base.items():
+        print(_ligne(f"base {VISITEURS_BASE} v, {c} copie(s)", j))
+    temoin = simuler(COPIES_TEMOIN, HEURES_TEMOIN)
+    print(_ligne(f"témoin {VISITEURS_TEMOIN} v, {COPIES_TEMOIN} copies", temoin))
 
-    print("\nTaille stockée (gzip + base64, octets), pire cas :")
-    print(f"  2 h réelles   : total {pire_reel['total']}  releve {pire_reel[CLE_RELEVE]}  lisseur {pire_reel[CLE_LISSEUR]}  "
-          f"memoire {pire_reel[CLE_MEMOIRE]}  (mémoire brute max {brute_reel} / garde {TAILLE_MAX_OCTETS})")
-    print(f"  ~20 h rejouées: total {pire['total']}  releve {pire[CLE_RELEVE]}  lisseur {pire[CLE_LISSEUR]}  "
-          f"memoire {pire[CLE_MEMOIRE]}  (mémoire brute max {brute} / garde {TAILLE_MAX_OCTETS})")
-    print(f"  finale ~20 h : total {finale['total']}")
+    print(f"\nCritère T5b (base : {VISITEURS_BASE} visiteurs × {DUREE_VISITE_MIN} min = {HEURES_BASE:g} h, {COPIES_BASE[-1]} copies) :")
+    cmd, octets = par_mois(base[COPIES_BASE[-1]])
+    print(f"  commandes/mois : {cmd:,} (cible ≤ {CIBLE_COMMANDES_MOIS:,}) -> {'atteinte' if cmd <= CIBLE_COMMANDES_MOIS else 'NON atteinte'}")
+    print(f"  transfert/mois : {octets / 10**9:.2f} Go (cible ≤ {CIBLE_OCTETS_MOIS / 10**9:.0f} Go) -> "
+          f"{'atteinte' if octets <= CIBLE_OCTETS_MOIS else 'NON atteinte'}")
 
-    print("\nBudget Upstash (hypothèses : trafic continu 24 h, une zone de cache CDN, copies actives = N) :")
-    print(f"  {'visiteurs':>9} {'copies':>6} {'/trains par mois':>18} {'/gare par mois':>16} {'total par mois':>16} {'% de 500 000':>13}")
-    for visiteurs, copies in ((5, 1), (50, 2), (500, 5)):
-        b = budget(visiteurs, copies)
-        gare_mois = b["gare_jour"] * JOURS_PAR_MOIS
-        trains_mois = b["trains_jour"] * JOURS_PAR_MOIS
-        total = b["mois"]
-        print(f"  {visiteurs:>9} {copies:>6} {trains_mois:>18,} {gare_mois:>16,} {total:>16,} {100 * total / LIMITE_COMMANDES:>12.0f} %")
-
-    octets_jour = (budget(5, 1)["lectures_trains_jour"] + OCTETS_PAR_RAFRAICHISSEMENT * budget(5, 1)["rafraichissements_jour"]) * pire["total"]
-    print(f"\nTransfert /trains (1 copie) : ~{octets_jour * JOURS_PAR_MOIS / 10**9:.2f} Go par mois "
-          f"contre {LIMITE_OCTETS / 10**9:.0f} Go (alerte à {SEUIL_ALERTE:.0%}). Alerte commandes : {SEUIL_ALERTE * LIMITE_COMMANDES:,.0f}.")
+    j = base[COPIES_BASE[-1]]
+    print(f"\nTaille stockée par clé à la fin de la journée (base, {COPIES_BASE[-1]} copies, octets de la valeur JSON) :")
+    for cle, octets_cle in sorted(j["tailles"].items(), key=lambda x: -x[1]):
+        print(f"  {cle:<28} {octets_cle:>10,}")
     return 0
 
 

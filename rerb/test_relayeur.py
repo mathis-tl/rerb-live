@@ -3,7 +3,9 @@ coût en commandes et budget simulé.
 
 AUCUN réseau : FauxUpstash (magasin), FauxPrim (PRIM) et horloge simulée. Données inventées ; les heures sont en UTC.
 """
+import functools
 import json
+import os
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -12,14 +14,17 @@ from pathlib import Path
 from magasin import ErreurMagasin, MagasinFaux, compresser_json
 from magasin_upstash import MagasinUpstash
 from memoire import PURGE_S, TAILLE_MAX_OCTETS, Memoire
-from relayeur import CACHE_LOCAL_S, Relayeur
-from serveur import (CLE_BLOCAGE, PLAFOND_JOUR, ErreurPrim, Plafond, Releve, Releveur, calculer_trains, consolider_livraison,
-                     est_nuit)
+from relayeur import Relayeur, prochaine_bascule_nuit
+from serveur import (CLE_BLOCAGE, INTERVALLE_S, PLAFOND_JOUR, ErreurPrim, Plafond, Releve, Releveur, calculer_trains,
+                     consolider_livraison, est_nuit)
 from test_faux_upstash import JETON_FICTIF, FauxUpstash
 from test_serveur import A, B, T0, appel, course, distance, livraison, localiser, nom
 
 DONNEES_PALAISEAU = Path.home() / "rerb-data-palaiseau-20261118"
-MESURE_UNE_COPIE_JOUR = 11520   # commandes Upstash, une copie, une requête toutes les 5 s pendant 24 h (mesure, voir TestBudget)
+MESURE_UNE_COPIE_VINGT_HEURES = 8292   # commandes Upstash, une copie, 20 h, une requête toutes les 5 s (mesure du 25/11, exploration/budget_upstash.py)
+LENT_OK = os.environ.get("RERB_LENT") == "1"   # suite budget : ≈14 min, hors check.sh (lancer avec RERB_LENT=1)
+CIBLE_COMMANDES_MOIS = 250_000         # 50 % de 500 000 (offre gratuite), pour 50 visiteurs et 3 copies, 20 h par jour (ticket T5b)
+CIBLE_OCTETS_MOIS = 6 * 10**9          # 60 % de 10 Go : même scénario
 
 URL_FICTIVE = "https://fictif-upstash.example.test"
 PARIS_NUIT = datetime(2026, 11, 17, 1, 0, tzinfo=timezone.utc)   # 02:00 à Paris : coupure de nuit
@@ -103,31 +108,112 @@ class TestPurgeMemoire(unittest.TestCase):
         self.assertEqual(memoire.taille_export(), len(json.dumps(memoire.exporter(), separators=(",", ":")).encode("utf-8")))
 
 
+def _a(m, instant):
+    """Place la Monde à `instant` (datetime aware, UTC)."""
+    m.t = (instant - T0).total_seconds()
+
+
 class TestCoutParRafraichissement(unittest.TestCase):
-    def test_un_rafraichissement_suit_la_suite_de_commandes_prevue(self):
+    def test_premier_rafraichissement_suit_la_suite_de_commandes_prevue(self):
         m = Monde()
         m.copie().lire(m.maintenant())
-        self.assertEqual(m.commandes(), ["MGET", "SET", "MGET", "GET", "EVAL", "MSET", "EVAL"])
+        self.assertEqual(m.commandes(), ["MGET", "SET", "MGET", "INCR", "EXPIRE", "MSET", "EVAL"])
         self.assertEqual(len(m.prim.appels), 1)
 
-    def test_relevé_frais_dans_le_cache_local_ne_coute_aucune_commande(self):
+    def test_rafraichissement_suivant_du_meme_jour_sans_expire(self):
         m = Monde()
         r = m.copie()
         r.lire(m.maintenant())
         avant = len(m.faux.commandes)
-        m.t += CACHE_LOCAL_S - 1
+        m.t += INTERVALLE_S
+        r.lire(m.maintenant())
+        self.assertEqual(m.commandes()[avant:], ["MGET", "SET", "MGET", "INCR", "MSET", "EVAL"])
+        self.assertEqual(len(m.prim.appels), 2)
+
+    def test_releve_frais_a_59_s_ne_coute_aucune_commande(self):
+        m = Monde()
+        r = m.copie()
+        r.lire(m.maintenant())
+        avant = len(m.faux.commandes)
+        m.t += INTERVALLE_S - 1
         r.lire(m.maintenant())
         self.assertEqual(len(m.faux.commandes), avant)
 
-    def test_releve_perime_sans_cache_local_coute_une_lecture(self):
+    def test_autre_copie_pendant_un_releve_frais_lit_sans_memoire(self):
+        m = Monde()
+        m.copie().lire(m.maintenant())
+        m.t += INTERVALLE_S - 1
+        avant = len(m.faux.commandes)
+        m.copie().lire(m.maintenant())
+        self.assertEqual(m.commandes()[avant:], ["MGET"])
+        self.assertNotIn("rerb:memoire", m.faux.commandes[-1])
+        self.assertEqual(len(m.prim.appels), 1)
+
+    def test_memoire_lue_seulement_sous_verrou(self):
+        m = Monde()
+        a, b = m.copie(), m.copie()
+        for s in range(0, 300, 5):
+            m.t = float(s)
+            a.lire(m.maintenant())
+            b.lire(m.maintenant())
+        avec_memoire = [c for c in m.faux.commandes if c[0] == "MGET" and "rerb:memoire" in c]
+        self.assertGreater(len(m.prim.appels), 1)
+        self.assertEqual(len(avec_memoire), len(m.prim.appels))
+
+    def test_memoire_non_reecrite_si_inchangee(self):
+        m = Monde()
+        r = Relayeur(m.magasin, lambda: livraison())   # livraison vide : la mémoire ne change pas
+        r.lire(m.maintenant())
+        m.t += INTERVALLE_S
+        r.lire(m.maintenant())
+        msets = [c for c in m.faux.commandes if c[0] == "MSET"]
+        self.assertEqual(len(msets), 2)
+        for c in msets:
+            self.assertNotIn("rerb:memoire", c[1::2])
+
+    def test_memoire_reecrite_quand_elle_change(self):
+        m = Monde()
+        m.copie().lire(m.maintenant())
+        msets = [c for c in m.faux.commandes if c[0] == "MSET"]
+        self.assertIn("rerb:memoire", msets[-1][1::2])
+
+
+class TestBasculeDeNuit(unittest.TestCase):
+    def test_prochaine_bascule_en_heure_de_paris(self):
+        fenetre = (1, 5)
+        self.assertEqual(prochaine_bascule_nuit(datetime(2026, 11, 16, 10, 0, tzinfo=timezone.utc), fenetre),
+                         datetime(2026, 11, 17, 0, 0, tzinfo=timezone.utc))
+        self.assertEqual(prochaine_bascule_nuit(datetime(2026, 11, 17, 0, 0, tzinfo=timezone.utc), fenetre),
+                         datetime(2026, 11, 17, 4, 0, tzinfo=timezone.utc))
+        self.assertEqual(prochaine_bascule_nuit(datetime(2026, 11, 17, 4, 0, tzinfo=timezone.utc), fenetre),
+                         datetime(2026, 11, 18, 0, 0, tzinfo=timezone.utc))
+        self.assertIsNone(prochaine_bascule_nuit(T0, None))
+
+    def test_cache_s_arrete_a_minuit_utc_et_la_nuit_ne_lit_qu_une_fois(self):
         m = Monde()
         r = m.copie()
+        _a(m, datetime(2026, 11, 16, 23, 59, 50, tzinfo=timezone.utc))
         r.lire(m.maintenant())
-        m.t += CACHE_LOCAL_S + 1   # le cache local expire, le relevé (60 s) ne l'est pas encore
         avant = len(m.faux.commandes)
-        r.lire(m.maintenant())
+        _a(m, datetime(2026, 11, 17, 0, 0, 0, tzinfo=timezone.utc))   # 01:00 à Paris : début de la coupure
+        vue = r.lire(m.maintenant())
+        self.assertEqual(vue.service, "nuit")
+        self.assertEqual(m.commandes()[avant:], ["MGET"])
+        for _ in range(4 * 3600 // 5 - 1):   # de 00:00:05 à 03:59:55 UTC : le cache tient jusqu'à 04:00 UTC
+            m.t += 5
+            r.lire(m.maintenant())
         self.assertEqual(m.commandes()[avant:], ["MGET"])
         self.assertEqual(len(m.prim.appels), 1)
+
+    def test_fin_de_coupure_relance_un_rafraichissement(self):
+        m = Monde()
+        r = m.copie()
+        _a(m, datetime(2026, 11, 16, 23, 59, 50, tzinfo=timezone.utc))
+        r.lire(m.maintenant())
+        _a(m, datetime(2026, 11, 17, 4, 0, 0, tzinfo=timezone.utc))   # 05:00 à Paris : fin de la coupure
+        vue = r.lire(m.maintenant())
+        self.assertIsNone(vue.service)
+        self.assertEqual(len(m.prim.appels), 2)
 
 
 class TestDeuxCopies(unittest.TestCase):
@@ -298,29 +384,28 @@ class TestBlocageLocal(unittest.TestCase):
         self.assertEqual(releveur.actualiser(horloge()), "ok")
 
 
+@functools.lru_cache(maxsize=None)
+def _simulation(copies, heures):
+    """Une simulation par (copies, heures) : rejeu coûteux, mis en cache pour les tests."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "exploration"))
+    import budget_upstash
+    return budget_upstash.simuler(copies, heures)
+
+
+@unittest.skipUnless(LENT_OK and (DONNEES_PALAISEAU / "prim_estimated_timetable").is_dir(), "suite lente : RERB_LENT=1 et données de Palaiseau requises")
 class TestBudget(unittest.TestCase):
-    """Budget simulé d'une journée : une origine toutes les 5 s (CDN s-maxage=5, pire cas). Le ticket T5 §6 demande de signaler
-    un dépassement des 60 % de 500 000 commandes par mois, sans rien implémenter : les deux cibles sont donc `expectedFailure`
-    (dépassement connu, décision de Mathis). Le test de mesure fige le nombre actuel pour voir tout changement."""
+    """Budget Upstash (exploration/budget_upstash.py), relevés réels de Palaiseau rejoués, une requête toutes les 5 s pendant la
+    fenêtre active, copies en tour de rôle. Critère T5b, décidé le 25/11 : base de 10 visiteurs × 30 min (5 h bout à bout), 3 copies,
+    au plus 250 000 commandes et 6 Go par mois. Le test de mesure fige la valeur d'une copie sur 20 h."""
 
-    def _journee(self, copies):
-        m = Monde()
-        relayeurs = [m.copie() for _ in range(copies)]
-        for i, s in enumerate(range(0, 86400, 5)):
-            m.t = float(s)
-            relayeurs[i % copies].lire(m.maintenant())
-        return len(m.faux.commandes)
+    def test_mesure_une_copie_sur_vingt_heures(self):
+        self.assertEqual(_simulation(1, 20)["commandes"], MESURE_UNE_COPIE_VINGT_HEURES)
 
-    def test_mesure_une_copie_sur_une_journee(self):
-        self.assertEqual(self._journee(1), MESURE_UNE_COPIE_JOUR)
+    def test_cible_commandes_par_mois_base_trois_copies(self):
+        self.assertLessEqual(_simulation(3, 5)["commandes"] * 30, CIBLE_COMMANDES_MOIS)
 
-    @unittest.expectedFailure
-    def test_une_copie_reste_sous_60_pour_cent_du_quota_mensuel(self):
-        self.assertLess(self._journee(1) * 30, 0.6 * 500_000)
-
-    @unittest.expectedFailure
-    def test_une_copie_neuve_par_requete_reste_sous_60_pour_cent(self):
-        self.assertLess(self._journee(17280) * 30, 0.6 * 500_000)
+    def test_cible_transfert_par_mois_base_trois_copies(self):
+        self.assertLessEqual(_simulation(3, 5)["octets"] * 30, CIBLE_OCTETS_MOIS)
 
 
 class TestEcritureEnPanne(unittest.TestCase):
@@ -334,7 +419,8 @@ class TestEcritureEnPanne(unittest.TestCase):
         vue = r.lire(m.maintenant())
         self.assertIsNotNone(vue.releve)
         self.assertIn("non partagé", vue.erreur)
-        m.t = CACHE_LOCAL_S + 5.0   # cache local expiré, relevé local encore frais, magasin toujours vide
+        r._cache = None   # cache local expiré ; relevé local encore frais (59 s), magasin toujours vide
+        m.t = INTERVALLE_S - 1.0
         vue = r.lire(m.maintenant())
         self.assertEqual(len(m.prim.appels), 1, "relevé local frais : pas de nouvel appel PRIM")
         self.assertIsNotNone(vue.releve)

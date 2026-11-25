@@ -6,7 +6,7 @@ import json
 import unittest
 
 from magasin import ErreurMagasin, MagasinFaux, MagasinLocal, compresser_json, decompresser_json
-from magasin_upstash import SCRIPT_COMPTER, SCRIPT_LIBERER, MagasinUpstash
+from magasin_upstash import SCRIPT_LIBERER, MagasinUpstash
 from test_faux_upstash import JETON_FICTIF, FauxUpstash
 
 URL_FICTIVE = "https://fictif-upstash.example.test"
@@ -65,10 +65,13 @@ class TestFormesDeCommandes(unittest.TestCase):
         self.assertIsNone(self.m.prendre_verrou("prim", 35))
         self.assertNotEqual(ancien, nouveau)
 
-    def test_compteur_par_eval_avec_expiration_48_h(self):
+    def test_compteur_par_incr_puis_expiration_48_h_a_la_creation(self):
+        """INCR (1 commande facturée) ; EXPIRE seulement quand le compteur vient d'être créé. Pas de script : facturé par
+        commande interne, un EVAL coûterait plus cher que ces deux commandes (voir docs/specs/spec-deploiement-prod.md §6)."""
         self.assertEqual(self.m.incrementer_compteur("plafond:2026-11-24"), 1)
-        self.assertEqual(self.faux.commandes[-1], ["EVAL", SCRIPT_COMPTER, 1, "rerb:plafond:2026-11-24", 172800])
+        self.assertEqual(self.faux.commandes[-2:], [["INCR", "rerb:plafond:2026-11-24"], ["EXPIRE", "rerb:plafond:2026-11-24", 172800]])
         self.assertEqual(self.m.incrementer_compteur("plafond:2026-11-24"), 2)
+        self.assertEqual(self.faux.commandes[-1], ["INCR", "rerb:plafond:2026-11-24"])
         self.assertEqual(self.m.lire_compteur("plafond:2026-11-24"), 2)
 
     def test_compteur_absent_vaut_zero_par_get(self):

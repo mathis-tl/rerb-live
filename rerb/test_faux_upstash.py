@@ -1,14 +1,14 @@
 """Faux serveur REST Upstash pour les tests (T5). Aucun réseau, horloge simulée, aucun test ici.
 
-Interprète les commandes que MagasinUpstash envoie : GET, MGET, SET (NX, PX, EX), MSET et les deux scripts EVAL connus
-(libération du verrou, compteur). Les scripts sont REPRODUITS EN PYTHON (pas d'exécution Lua) : ce qu'ils font est vérifié
-ici, pas le texte Lua lui-même.
+Interprète les commandes que MagasinUpstash envoie : GET, MGET, SET (NX, PX, EX), MSET, INCR, EXPIRE et le script EVAL connu
+(libération du verrou). Le script est REPRODUIT EN PYTHON (pas d'exécution Lua) : ce qu'il fait est vérifié ici, pas le texte Lua.
+Compte les octets envoyés et reçus (mesure du transfert, exploration/budget_upstash.py).
 Toute autre commande : HTTP 400, comme Upstash.
 Pannes simulables : `panne` = "delai", "http500", "json" ou "forme".
 """
 import json
 
-from magasin_upstash import SCRIPT_COMPTER, SCRIPT_LIBERER
+from magasin_upstash import SCRIPT_LIBERER
 
 JETON_FICTIF = "jeton-fictif-reconnaissable-7f3a"
 
@@ -25,6 +25,8 @@ class FauxUpstash:
         self.commandes = []               # chaque corps reçu, décodé (liste d'arguments)
         self.entetes = []                 # en-têtes reçus, pour vérifier l'autorisation
         self.panne = None                 # None, "delai", "http500", "json" ou "forme"
+        self.octets_envoyes = 0           # corps des requêtes reçues (une commande = un corps)
+        self.octets_recus = 0             # réponses renvoyées
 
     def _entree(self, cle):
         entree = self.valeurs.get(cle)
@@ -52,10 +54,13 @@ class FauxUpstash:
             return 401, b'{"error":"Unauthorized"}'
         args = json.loads(corps)
         self.commandes.append(args)
+        self.octets_envoyes += len(corps)
         try:
-            return 200, json.dumps({"result": self._executer(args)}).encode("utf-8")
+            statut, reponse = 200, json.dumps({"result": self._executer(args)}).encode("utf-8")
         except _Refus as erreur:
-            return 400, json.dumps({"error": str(erreur)}).encode("utf-8")
+            statut, reponse = 400, json.dumps({"error": str(erreur)}).encode("utf-8")
+        self.octets_recus += len(reponse)
+        return statut, reponse
 
     def _executer(self, args):
         commande = args[0].upper()
@@ -69,6 +74,10 @@ class FauxUpstash:
             for cle, valeur in zip(args[1::2], args[2::2]):
                 self.valeurs[cle] = (valeur, None)
             return "OK"
+        if commande == "INCR":
+            return self._incr(args[1])
+        if commande == "EXPIRE":
+            return self._expirer(args[1], args[2])
         if commande == "EVAL":
             return self._eval(args)
         raise _Refus(f"commande inconnue : {commande}")
@@ -99,16 +108,20 @@ class FauxUpstash:
                 del self.valeurs[cles[0]]
                 return 1
             return 0
-        if script == SCRIPT_COMPTER:
-            return self._incrementer(cles[0], int(argv[0]))
         raise _Refus("script inconnu")
 
-    def _incrementer(self, cle, duree):
-        """INCR, avec expiration `duree` s à la création (comme le script : EXPIRE si n == 1)."""
+    def _incr(self, cle):
+        """INCR : ajoute 1, garde l'expiration éventuelle, crée la clé à 1 si absente."""
         entree = self._entree(cle)
         n = int(entree[0]) + 1 if entree is not None else 1
         expiration = entree[1] if entree is not None else None
-        if n == 1:
-            expiration = self.horloge() + duree
         self.valeurs[cle] = (str(n), expiration)
         return n
+
+    def _expirer(self, cle, duree):
+        """EXPIRE : 1 si la clé existe (expiration posée), 0 sinon."""
+        entree = self._entree(cle)
+        if entree is None:
+            return 0
+        self.valeurs[cle] = (entree[0], self.horloge() + float(duree))
+        return 1

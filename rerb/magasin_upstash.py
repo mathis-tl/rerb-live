@@ -23,8 +23,6 @@ EXPIRATION_COMPTEUR_S = 48 * 3600     # un compteur de jour ne survit pas plus d
 
 # Libère le verrou seulement si `ARGV[1]` (le jeton de l'appelant) en est encore le détenteur.
 SCRIPT_LIBERER = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end"
-# Ajoute 1 ; à la création du compteur seulement, pose l'expiration `ARGV[1]` (secondes).
-SCRIPT_COMPTER = "local n = redis.call('INCR', KEYS[1]) if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end return n"
 
 
 class _SansRedirection(urllib.request.HTTPRedirectHandler):
@@ -93,7 +91,11 @@ class MagasinUpstash(Magasin):
         return 0 if resultat is None else _entier(resultat)
 
     def incrementer_compteur(self, cle):
-        return _entier(self._commande("EVAL", SCRIPT_COMPTER, 1, self._cle(cle), EXPIRATION_COMPTEUR_S))
+        """INCR (1 commande) ; EXPIRE seulement quand le compteur vient d'être créé (2 commandes au premier appel du jour)."""
+        n = _entier(self._commande("INCR", self._cle(cle)))
+        if n == 1:
+            self._commande("EXPIRE", self._cle(cle), EXPIRATION_COMPTEUR_S)
+        return n
 
     def lire(self, cle):
         texte = self._commande("GET", self._cle(cle))
