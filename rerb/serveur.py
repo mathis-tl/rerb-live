@@ -35,7 +35,7 @@ from gare import ReleveurGares
 from geometry import Geometry, NoValidDistance, _dist, load_morceaux, point_a_distance
 from lissage import Lisseur
 from magasin import ErreurMagasin, MagasinLocal
-from memoire import Memoire
+from memoire import Memoire, train_depuis_json, train_vers_json
 from position import DistanceInconnue, Etat, Reseau, distance_depuis_reseau, estimer, lire_train
 from stops import load_stops, stop_area_number
 from troncon import cap_degres, chemin_troncon
@@ -92,11 +92,38 @@ class ErreurPrim(Exception):
         self.statut = statut
 
 
+VERSION_RELEVE = 1
+BLOCAGE_429_S = 900       # PRIM limite le débit : 15 min avant un nouvel essai
+BLOCAGE_REFUS_S = 21600   # clé refusée (401/403) : 6 h, le temps qu'un humain intervienne (levée : supprimer la clé « blocage »)
+
+
+def duree_blocage(statut):
+    """Durée du blocage (secondes) après un refus PRIM de code `statut` ; 0 si ce code ne bloque pas."""
+    if statut == 429:
+        return BLOCAGE_429_S
+    if statut in (401, 403):
+        return BLOCAGE_REFUS_S
+    return 0
+
+
 @dataclass(frozen=True)
 class Releve:
     """Instantané IMMUABLE du dernier relevé : le fil qui interroge PRIM le remplace d'un coup (une seule affectation)."""
     recu: datetime
     trains: dict  # course -> (Train consolidé, {gare: retard en secondes})
+
+    def exporter(self):
+        """JSON pur (format versionné) : état complet d'un relevé, pour le magasin Upstash."""
+        return {"v": VERSION_RELEVE, "recu": self.recu.isoformat(),
+                "trains": {ref: {**train_vers_json(train), "retards": retards} for ref, (train, retards) in self.trains.items()}}
+
+    @classmethod
+    def importer(cls, d):
+        if d.get("v") != VERSION_RELEVE:
+            raise ValueError(f"format de relevé inconnu : {d.get('v')!r}")
+        return cls(datetime.fromisoformat(d["recu"]),
+                   {ref: (train_depuis_json(t), {gare: float(s) for gare, s in t["retards"].items()})
+                    for ref, t in d["trains"].items()})
 
 
 def _valeur(x):
@@ -273,6 +300,15 @@ def jour_paris(instant):
     return instant.astimezone(PARIS).date()
 
 
+def est_nuit(maintenant, fenetre):
+    """True si `maintenant` tombe dans la coupure `fenetre` = (heure de début, heure de fin), heure de Paris ; `fenetre` None : jamais.
+    # INVARIANT : l'heure se calcule en Europe/Paris, jamais à partir de l'heure système (Vercel tourne en UTC ; l'heure d'été décale)."""
+    if fenetre is None:
+        return False
+    debut, fin = fenetre
+    return debut <= maintenant.astimezone(PARIS).hour < fin
+
+
 class Plafond:
     """Nombre d'appels PRIM du jour, lu et écrit dans `magasin` sous la clé `<nom>:<AAAA-MM-JJ>` (date de Paris).
     `instant` absent : l'heure vient de `horloge` (UTC réel par défaut). Une panne du magasin lève ErreurMagasin."""
@@ -281,11 +317,11 @@ class Plafond:
         self.magasin, self.maximum, self._nom = magasin, maximum, nom
         self._horloge = horloge or (lambda: datetime.now(timezone.utc))
 
-    def _cle(self, instant):
+    def cle(self, instant=None):
         return f"{self._nom}:{jour_paris(self._horloge() if instant is None else instant).isoformat()}"
 
     def compte(self, instant=None):
-        return self.magasin.lire_compteur(self._cle(instant))
+        return self.magasin.lire_compteur(self.cle(instant))
 
     @property
     def utilises(self):
@@ -295,7 +331,7 @@ class Plafond:
         return self.compte(instant) < self.maximum
 
     def compter(self, instant=None):
-        return self.magasin.incrementer_compteur(self._cle(instant))
+        return self.magasin.incrementer_compteur(self.cle(instant))
 
 
 def _utilises(plafond):
@@ -304,6 +340,25 @@ def _utilises(plafond):
         return plafond.utilises
     except ErreurMagasin:
         return None
+
+
+def corps_trains(maintenant, demo, service, releve, erreur, bloque, plafond, trains):
+    """Réponse JSON de /trains, commune au serveur local et à la fonction Vercel (mêmes clés). `releve` : Releve ou None."""
+    return {
+        "maintenant": maintenant.isoformat(), "demo": demo, "service": service,   # service : « nuit » pendant la coupure, sinon None
+        "releve_recu": releve.recu.isoformat() if releve is not None else None,
+        "releve_age_s": int((maintenant - releve.recu).total_seconds()) if releve is not None else None,
+        "erreur": erreur, "bloque": bloque, "plafond": plafond, "trains": trains,
+    }
+
+
+def ref_gare(chemin, gares):
+    """Valeur du paramètre `ref` si c'est EXACTEMENT un paramètre de la liste blanche `gares` (et rien d'autre dans la requête), sinon None."""
+    requete = urllib.parse.parse_qs(urllib.parse.urlsplit(chemin).query, keep_blank_values=True, strict_parsing=False)
+    valeurs = requete.get("ref", [])
+    if len(requete) != 1 or len(valeurs) != 1 or valeurs[0] not in gares:
+        return None
+    return valeurs[0]
 
 
 class Releveur:
@@ -319,27 +374,23 @@ class Releveur:
         self.releve = None
         self.derniere_erreur = None
         self.bloque = False
-        self._bloque_local = False   # blocage 401/403/429 gardé en local si son écriture dans le magasin a échoué
+        self._bloque_jusqu = None    # fin du blocage 401/403/429 gardé en local (même durée que dans le magasin, qui l'expire seul)
 
     @property
     def plafond(self):
         return self._plafond
 
     def est_nuit(self, maintenant):
-        """True pendant la coupure. `fenetre_nuit` None : jamais de coupure (démo).
-        # INVARIANT : l'heure de la coupure se calcule à partir de `maintenant` en Europe/Paris, jamais de l'heure système
-        # (Vercel tourne en UTC ; l'heure d'été décale d'une heure)."""
-        if self._fenetre_nuit is None:
-            return False
-        debut, fin = self._fenetre_nuit
-        return debut <= maintenant.astimezone(PARIS).hour < fin
+        """True pendant la coupure. `fenetre_nuit` None : jamais de coupure (démo)."""
+        return est_nuit(maintenant, self._fenetre_nuit)
 
     def actualiser(self, maintenant):
         """-> 'ok', 'trop tôt', 'plafond', 'bloqué', 'nuit', 'occupé', 'erreur' ou 'magasin'. Au plus un appel PRIM en cours.
         Ordre des contrôles : bloqué, nuit, trop tôt, plafond, verrou, appel. Une panne du magasin : 'magasin', aucun appel."""
         magasin = self._magasin
         try:
-            self.bloque = self._bloque_local or magasin.lire(CLE_BLOCAGE) is not None
+            locale = self._bloque_jusqu is not None and maintenant < self._bloque_jusqu
+            self.bloque = locale or magasin.lire(CLE_BLOCAGE) is not None
             if self.bloque:
                 return "bloqué"
             # Nuit : aucun appel, aucun comptage. Le relevé reste en cache (son âge continue de croître).
@@ -377,11 +428,13 @@ class Releveur:
         except ErreurPrim as erreur:
             self.derniere_erreur = str(erreur)
             if erreur.statut in STATUTS_CLE_REFUSEE:
-                self.bloque = self._bloque_local = True
+                duree = duree_blocage(erreur.statut)
+                self.bloque = True
+                self._bloque_jusqu = maintenant + timedelta(seconds=duree)
                 try:
-                    magasin.ecrire(CLE_BLOCAGE, {"statut": erreur.statut})
+                    magasin.ecrire(CLE_BLOCAGE, {"statut": erreur.statut}, ttl_s=duree)
                 except ErreurMagasin:
-                    pass   # blocage gardé en local pour ce démarrage
+                    pass   # blocage gardé en local jusqu'à son échéance
             return "erreur"
         except (KeyError, IndexError, TypeError, ValueError, AttributeError, http.client.HTTPException) as erreur:
             self.derniere_erreur = f"réponse illisible ({type(erreur).__name__})"
@@ -473,15 +526,11 @@ def creer_serveur(releveur, distance, localiser, nom_gare, port=8765, horloge=No
                 if r is not relevé_vu["releve"]:
                     lisseur.avancer({ref: train for ref, (train, _retards) in r.trains.items()}, r.recu)
                     relevé_vu["releve"] = r
-        return {
-            "maintenant": maintenant.isoformat(), "demo": demo,
-            "service": "nuit" if releveur.est_nuit(maintenant) else None,   # coupure de nuit : pas d'appel PRIM, relevé gardé
-            "releve_recu": r.recu.isoformat() if r else None,
-            "releve_age_s": int((maintenant - r.recu).total_seconds()) if r else None,
-            "erreur": releveur.derniere_erreur, "bloque": releveur.bloque,
-            "plafond": {"utilises": _utilises(releveur.plafond), "maximum": releveur.plafond.maximum},
-            "trains": calculer_trains(r, maintenant, distance, localiser, nom_gare, duree_min, lisseur) if r else [],
-        }
+        return corps_trains(
+            maintenant, demo, "nuit" if releveur.est_nuit(maintenant) else None, r,   # coupure de nuit : pas d'appel PRIM, relevé gardé
+            releveur.derniere_erreur, releveur.bloque,
+            {"utilises": _utilises(releveur.plafond), "maximum": releveur.plafond.maximum},
+            calculer_trains(r, maintenant, distance, localiser, nom_gare, duree_min, lisseur) if r else [])
 
     class Gestionnaire(BaseHTTPRequestHandler):
         cache_controle = None   # remplace "no-store" pour les fichiers statiques (revalidation par ETag)
@@ -529,14 +578,6 @@ def creer_serveur(releveur, distance, localiser, nom_gare, port=8765, horloge=No
                 return
             self._envoyer_statique(f, corps=False)
 
-        def _ref_gare(self):
-            """Valeur du paramètre `ref` si c'est EXACTEMENT un paramètre de la liste blanche, sinon None."""
-            requete = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query, keep_blank_values=True, strict_parsing=False)
-            valeurs = requete.get("ref", [])
-            if len(requete) != 1 or len(valeurs) != 1 or valeurs[0] not in gares:
-                return None
-            return valeurs[0]
-
         def do_GET(self):
             route = self.path.split("?")[0]
             if route in ("/trains", "/statut"):
@@ -545,13 +586,14 @@ def creer_serveur(releveur, distance, localiser, nom_gare, port=8765, horloge=No
                     corps.pop("trains")
                 self._envoyer(json.dumps(corps, ensure_ascii=False).encode("utf-8"), TYPES[".json"])
             elif route == "/gare" and releveur_gares is not None and gares is not None:
-                ref = self._ref_gare()
+                ref = ref_gare(self.path, gares)
                 if ref is None:
                     self.send_error(404)
                     return
                 resultat = releveur_gares.passages(f"STIF:StopArea:SP:{ref}:", horloge())
+                plafond = releveur_gares.plafond   # None en production (Vercel : pas de plafond propre, voir gare.py)
                 corps = {"ref": ref, "gare": gares[ref], **resultat, "demo": demo, "bloque": releveur_gares.bloque,
-                         "plafond": {"utilises": releveur_gares.plafond.utilises, "maximum": releveur_gares.plafond.maximum}}
+                         "plafond": None if plafond is None else {"utilises": _utilises(plafond), "maximum": plafond.maximum}}
                 self._envoyer(json.dumps(corps, ensure_ascii=False).encode("utf-8"), TYPES[".json"])
             elif route == "/geo" and geo is not None:
                 self._envoyer(json.dumps(geo, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), TYPES[".json"])

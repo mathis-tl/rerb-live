@@ -4,7 +4,7 @@ Décision de Mathis (plan tâche 4 §0.4) : le « prochain train » d'une gare v
 1 000 000 par jour), pas de la carte. Cache de 60 s PAR GARE (la source ne change que toutes les ~30 s, sonde du 15/11).
 • lire_passages  : réponse PRIM -> liste de passages du RER B (heure estimée, retard, à quai, annulé), triés, limités.
 • ReleveurGares  : cache par gare, plafond d'appels commun, un seul appel à la fois par gare, erreur = dernier relevé gardé,
-                   401/403/429 = plus aucun appel. Même logique que `Releveur` (serveur.py).
+                   401/403/429 = plus aucun appel avant l'échéance du blocage. Même logique que `Releveur` (serveur.py).
 Les heures du cache sont refiltrées à chaque requête : un train parti disparaît sans nouvel appel.
 Bibliothèque standard seulement ; la source (`fetch(gare)`) est injectée, les tests n'appellent jamais le réseau.
 """
@@ -64,7 +64,8 @@ def lire_passages(reponse, maintenant, limite=8):
 
 
 class ReleveurGares:
-    """`fetch(gare)` -> réponse `stop-monitoring` décodée, ou lève ErreurPrim (serveur.py). `plafond` : voir Plafond."""
+    """`fetch(gare)` -> réponse `stop-monitoring` décodée, ou lève ErreurPrim (serveur.py). `plafond` : voir Plafond ; None : pas de
+    plafond propre (Vercel : `/gare` est limité par la liste blanche des gares et le cache du CDN, voir docs/specs/spec-deploiement-prod.md)."""
 
     def __init__(self, fetch, plafond, intervalle_s=60, limite=8):
         self._fetch, self._plafond = fetch, plafond
@@ -75,6 +76,7 @@ class ReleveurGares:
         self._tentative = {}                     # gare -> instant du dernier appel (réussi ou non)
         self._erreur = {}                        # gare -> message de la dernière erreur
         self.bloque = False
+        self._bloque_jusqu = None                # fin du blocage 401/403/429 : 15 min pour 429, 6 h pour 401/403 (decision T5 a)
 
     @property
     def plafond(self):
@@ -92,21 +94,23 @@ class ReleveurGares:
 
     def passages(self, gare, maintenant):
         """-> {statut, passages, age_s, erreur}. statut : ok (appel fait), cache, plafond, bloqué, erreur, occupé."""
-        from serveur import ErreurPrim   # import tardif : serveur.py importe ce module
+        from serveur import ErreurPrim, duree_blocage   # import tardif : serveur.py importe ce module
         with self._verrou:
+            self.bloque = self._bloque_jusqu is not None and maintenant < self._bloque_jusqu
             if self.bloque:
                 decision = "bloqué"
             elif gare in self._en_cours:
                 decision = "occupé"
             elif gare in self._tentative and maintenant - self._tentative[gare] < self._intervalle:
                 decision = "cache"
-            elif not self._plafond.autorise():
+            elif self._plafond is not None and not self._plafond.autorise():
                 decision = "plafond"
             else:
                 decision = "appeler"
                 self._en_cours.add(gare)
                 self._tentative[gare] = maintenant
-                self._plafond.compter()
+                if self._plafond is not None:
+                    self._plafond.compter()
         if decision != "appeler":
             return self._resultat(gare, maintenant, decision)
         try:
@@ -115,7 +119,9 @@ class ReleveurGares:
         except ErreurPrim as e:
             with self._verrou:
                 self._erreur[gare] = str(e)
-                self.bloque = e.statut in STATUTS_CLE_REFUSEE
+                if e.statut in STATUTS_CLE_REFUSEE:
+                    self._bloque_jusqu = maintenant + timedelta(seconds=duree_blocage(e.statut))
+                    self.bloque = True
             statut = "erreur"
         except (ValueError, KeyError, IndexError, TypeError, AttributeError, http.client.HTTPException) as e:
             with self._verrou:

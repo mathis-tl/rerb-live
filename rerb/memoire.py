@@ -11,14 +11,19 @@ Règles :
   gare suivante ; l'arrivée ne peut pas dépasser le départ réparé. Heure ramenée en arrière -> `repare`.
 • Mémoire par train (clé fournie par l'appelant, par ex. DatedVehicleJourneyRef). Un relevé sans passage
   n'efface pas la mémoire.
+• Purge (T5) : une course absente du relevé depuis plus de PURGE_S (4 h) est oubliée ; une course sans
+  horodatage n'a jamais été « vue » et n'est pas gardée. L'export ne dépasse pas TAILLE_MAX_OCTETS.
 """
+import json
 from dataclasses import fields, replace
 from datetime import datetime
 
-from position import Passage
+from position import Passage, Train
 
 _INSTANTS = {"arrivee", "depart", "retenu_depuis", "retenu_le"}   # champs de Passage qui sont des instants (ISO 8601 en JSON)
 VERSION_FORMAT = 1
+PURGE_S = 4 * 3600                # une course non vue depuis 4 h est oubliée
+TAILLE_MAX_OCTETS = 2_000_000     # au-delà, l'état n'est pas écrit (garde de taille du relayeur)
 
 
 def _cle_temps(p):
@@ -26,27 +31,62 @@ def _cle_temps(p):
     return (t is None, t)
 
 
+def passage_vers_json(p):
+    return {f.name: (getattr(p, f.name).isoformat() if f.name in _INSTANTS and getattr(p, f.name) is not None
+                     else getattr(p, f.name))
+            for f in fields(Passage)}
+
+
+def passage_depuis_json(d):
+    return Passage(**{k: (datetime.fromisoformat(v) if k in _INSTANTS and v is not None else v) for k, v in d.items()})
+
+
+def train_vers_json(train):
+    recu = train.recorded_at
+    return {"passages": [passage_vers_json(p) for p in train.passages],
+            "recorded_at": recu.isoformat() if recu is not None else None}
+
+
+def train_depuis_json(d):
+    recu = d.get("recorded_at")
+    return Train([passage_depuis_json(p) for p in d["passages"]],
+                 datetime.fromisoformat(recu) if recu is not None else None)
+
+
 class Memoire:
     def __init__(self):
         self._precedent = {}  # clé du train -> passages consolidés du dernier relevé, triés par heure
+        self._vus = {}        # clé du train -> horodatage (recorded_at) du dernier relevé où elle figurait
 
     def exporter(self):
         """Passages retenus en JSON pur (instants en ISO 8601, format versionné)."""
         return {"v": VERSION_FORMAT,
-                "trains": {cle: [{f.name: (getattr(p, f.name).isoformat() if f.name in _INSTANTS and getattr(p, f.name) is not None
-                                           else getattr(p, f.name)) for f in fields(Passage)} for p in passages]
-                           for cle, passages in self._precedent.items()}}
+                "trains": {cle: [passage_vers_json(p) for p in passages] for cle, passages in self._precedent.items()},
+                "vus": {cle: v.isoformat() for cle, v in self._vus.items()}}
 
     def importer(self, d):
-        """Remplace la mémoire par celle d'un `exporter()`."""
+        """Remplace la mémoire par celle d'un `exporter()`. Sans « vus » (export antérieur à T5) : accepté."""
         if d.get("v") != VERSION_FORMAT:
             raise ValueError(f"format de mémoire inconnu : {d.get('v')!r}")
-        self._precedent = {cle: [Passage(**{k: (datetime.fromisoformat(v) if k in _INSTANTS and v is not None else v)
-                                            for k, v in p.items()}) for p in passages]
-                           for cle, passages in d["trains"].items()}
+        self._precedent = {cle: [passage_depuis_json(p) for p in passages] for cle, passages in d["trains"].items()}
+        self._vus = {cle: datetime.fromisoformat(v) for cle, v in d.get("vus", {}).items()}
+
+    def taille_export(self):
+        """Taille en octets de l'export JSON compact (ce qui est stocké avant compression)."""
+        return len(json.dumps(self.exporter(), separators=(",", ":")).encode("utf-8"))
+
+    def purger(self, maintenant):
+        """Oublie les courses non vues depuis plus de PURGE_S, et celles qui n'ont jamais eu d'horodatage."""
+        for cle in set(self._precedent) | set(self._vus):
+            vu = self._vus.get(cle)
+            if vu is None or (maintenant - vu).total_seconds() > PURGE_S:
+                self._precedent.pop(cle, None)
+                self._vus.pop(cle, None)
 
     def consolider(self, cle, train):
         """Train du relevé courant + gares retirées gardées en mémoire -> Train consolidé."""
+        if train.recorded_at is not None:
+            self._vus[cle] = train.recorded_at
         if not train.passages:
             return train
         # une gare listée sans aucune heure alors que la mémoire en a (MBTA : l'origine reste listée après le départ,

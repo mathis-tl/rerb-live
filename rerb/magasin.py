@@ -1,10 +1,13 @@
 """Magasin : l'état partagé du serveur (verrou du relevé PRIM, compteurs d'appels, blocage, dernière tentative) derrière une seule interface.
 
-Bibliothèque standard seulement. Deux implémentations :
+Bibliothèque standard seulement. Trois implémentations :
 • MagasinLocal : mémoire, compteurs aussi dans un fichier (un seul Mac, comportement d'avant T2).
 • MagasinFaux  : même interface pour les tests, horloge injectée, pannes simulables.
-T5 branchera un magasin Upstash sur la même interface. Une panne se signale par ErreurMagasin, jamais par une valeur par défaut.
+• MagasinUpstash (magasin_upstash.py) : Upstash REST, déployé sur Vercel.
+Une panne se signale par ErreurMagasin, jamais par une valeur par défaut.
 """
+import base64
+import gzip
 import json
 import threading
 import time
@@ -14,6 +17,20 @@ from pathlib import Path
 
 class ErreurMagasin(Exception):
     """Le magasin ne répond pas ou refuse. L'appelant ne fait alors RIEN qui coûte (aucun appel PRIM)."""
+
+
+def compresser_json(valeur):
+    """Valeur JSON -> texte base64 de son gzip (taille réduite pour Upstash ; mtime fixé pour un résultat stable)."""
+    octets = json.dumps(valeur, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return base64.b64encode(gzip.compress(octets, mtime=0)).decode("ascii")
+
+
+def decompresser_json(texte):
+    """Inverse de compresser_json. Une valeur illisible lève ErreurMagasin."""
+    try:
+        return json.loads(gzip.decompress(base64.b64decode(texte)).decode("utf-8"))
+    except (TypeError, ValueError, OSError, EOFError, UnicodeDecodeError):
+        raise ErreurMagasin("valeur compressée illisible") from None
 
 
 class Magasin:
@@ -36,12 +53,35 @@ class Magasin:
         raise NotImplementedError
 
     def lire(self, cle):
-        """Valeur JSON stockée sous `cle`, ou None."""
+        """Valeur JSON stockée sous `cle`, ou None (absente ou expirée)."""
         raise NotImplementedError
 
-    def ecrire(self, cle, valeur):
-        """Stocke une valeur JSON sous `cle`."""
+    def ecrire(self, cle, valeur, ttl_s=None):
+        """Stocke une valeur JSON sous `cle`. `ttl_s` : au-delà, la valeur est absente (None : pas d'expiration)."""
         raise NotImplementedError
+
+    def ecrire_compresse(self, cle, octets, ttl_s=None):
+        """Stocke `octets` gzip, encodés en base64 (une valeur JSON comme les autres)."""
+        self.ecrire(cle, base64.b64encode(gzip.compress(octets, mtime=0)).decode("ascii"), ttl_s=ttl_s)
+
+    def lire_compresse(self, cle):
+        """Octets décompressés, ou None. Une valeur illisible lève ErreurMagasin."""
+        texte = self.lire(cle)
+        if texte is None:
+            return None
+        try:
+            return gzip.decompress(base64.b64decode(texte))
+        except (TypeError, ValueError, OSError):
+            raise ErreurMagasin("valeur compressée illisible") from None
+
+    def lire_plusieurs(self, cles):
+        """Valeurs JSON de `cles`, dans le même ordre (None pour une clé absente). Upstash : une seule commande MGET."""
+        return [self.lire(cle) for cle in cles]
+
+    def ecrire_groupe(self, valeurs):
+        """Stocke plusieurs valeurs JSON (dict clé -> valeur). Upstash : une seule commande MSET."""
+        for cle, valeur in valeurs.items():
+            self.ecrire(cle, valeur)
 
 
 class MagasinLocal(Magasin):
@@ -58,7 +98,7 @@ class MagasinLocal(Magasin):
         self._horloge = horloge or time.monotonic   # secondes ; sert à l'expiration des verrous
         self._verrou = threading.Lock()              # protège tout l'état ci-dessous
         self._verrous = {}                           # nom -> (jeton, instant d'expiration)
-        self._valeurs = {}
+        self._valeurs = {}                           # clé -> (valeur, instant d'expiration ou None)
         self._compteurs = self._charger()
 
     def _charger(self):
@@ -110,11 +150,19 @@ class MagasinLocal(Magasin):
 
     def lire(self, cle):
         with self._verrou:
-            return self._valeurs.get(cle)
+            entree = self._valeurs.get(cle)
+            if entree is None:
+                return None
+            valeur, expiration = entree
+            if expiration is not None and expiration <= self._horloge():
+                del self._valeurs[cle]
+                return None
+            return valeur
 
-    def ecrire(self, cle, valeur):
+    def ecrire(self, cle, valeur, ttl_s=None):
         with self._verrou:
-            self._valeurs[cle] = valeur
+            expiration = None if ttl_s is None else self._horloge() + ttl_s
+            self._valeurs[cle] = (valeur, expiration)
 
 
 class MagasinFaux(MagasinLocal):
@@ -163,6 +211,6 @@ class MagasinFaux(MagasinLocal):
         self._garde()
         return super().lire(cle)
 
-    def ecrire(self, cle, valeur):
+    def ecrire(self, cle, valeur, ttl_s=None):
         self._garde()
-        return super().ecrire(cle, valeur)
+        return super().ecrire(cle, valeur, ttl_s=ttl_s)

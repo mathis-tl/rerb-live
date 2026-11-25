@@ -6,10 +6,11 @@ suivante ; l'heure réparée est marquée (`repare`), toute heure issue de la m�
 Décor : A (origine, départ 08:00:00), B (08:03:00 / 08:04:00), C (08:07:00 / 08:08:00), D (terminus, 08:10:00).
 Distances inventées : A-B 2 400 m, B-C 3 000 m, C-D 1 000 m.
 """
+import json
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from memoire import Memoire
+from memoire import PURGE_S, TAILLE_MAX_OCTETS, Memoire, train_depuis_json, train_vers_json
 from position import DistanceInconnue, Etat, Passage, Train, estimer
 
 DIST = {frozenset(p): m for p, m in (("AB", 2400.0), ("BC", 3000.0), ("CD", 1000.0), ("AC", 5400.0))}
@@ -205,6 +206,43 @@ class TestMarquesDansEstimation(unittest.TestCase):
         e = estimer(t, h("08:01:30"), distance)
         self.assertEqual(e.etat, Etat.EN_ROUTE)
         self.assertTrue(e.reconstruit and e.repare)
+
+
+class TestPurgeEtTaille(unittest.TestCase):
+    def test_course_non_vue_depuis_plus_de_4_h_est_oubliee(self):
+        m = Memoire()
+        m.consolider("ancienne", train(A(), B(), recorded="08:00:30"))
+        m.consolider("recente", train(A(), B(), recorded="11:30:00"))
+        m.purger(h("12:00:31"))   # « ancienne » : 4 h 0 min 1 s sans vue ; « recente » : 30 min
+        self.assertEqual(sorted(m.exporter()["trains"]), ["recente"])
+
+    def test_course_vue_a_l_instant_limite_est_gardee(self):
+        m = Memoire()
+        m.consolider("k", train(A(), B(), recorded="08:00:30"))
+        m.purger(h("08:00:30") + timedelta(seconds=PURGE_S))
+        self.assertIn("k", m.exporter()["trains"])
+
+    def test_export_contient_vus_et_import_sans_vus_reste_accepte(self):
+        m = Memoire()
+        m.consolider("k", train(A(), B(), recorded="08:00:30"))
+        d = m.exporter()
+        self.assertEqual(d["vus"], {"k": h("08:00:30").isoformat()})
+        del d["vus"]
+        autre = Memoire()
+        autre.importer(d)                 # un export antérieur à T5 se lit sans erreur
+        self.assertEqual(sorted(autre.exporter()["trains"]), ["k"])
+
+    def test_taille_export_mesure_le_json_compact(self):
+        m = Memoire()
+        m.consolider("k", train(A(), B(), recorded="08:00:30"))
+        attendu = len(json.dumps(m.exporter(), separators=(",", ":")).encode("utf-8"))
+        self.assertEqual(m.taille_export(), attendu)
+        self.assertEqual(TAILLE_MAX_OCTETS, 2_000_000)
+
+    def test_train_aller_retour_json(self):
+        t = train(A(), Passage("B", h("08:03:00"), None, annule=True), recorded="08:00:30")
+        d = json.loads(json.dumps(train_vers_json(t)))
+        self.assertEqual(train_depuis_json(d), t)
 
 
 if __name__ == "__main__":

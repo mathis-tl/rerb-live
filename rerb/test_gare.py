@@ -221,5 +221,34 @@ class TestReleveurGares(unittest.TestCase):
         self.assertEqual(interne, ["occupé"])
 
 
+class TestReleveurGaresProduction(unittest.TestCase):
+    """Version Vercel : pas de plafond propre (`plafond=None`), blocage PRIM qui expire après sa durée."""
+
+    def test_sans_plafond_propre_aucun_refus(self):
+        f = Fausse([reponse() for _ in range(50)])
+        r = ReleveurGares(f, None, intervalle_s=60)
+        self.assertIsNone(r.plafond)
+        for i in range(50):
+            self.assertEqual(r.passages(f"STIF:StopArea:SP:{i}:", T0)["statut"], "ok")
+        self.assertEqual(len(f.appels), 50)
+
+    def test_blocage_429_expire_apres_quinze_minutes(self):
+        f = Fausse([ErreurPrim("HTTP 429", 429), reponse()])
+        r = ReleveurGares(f, None, intervalle_s=60)
+        self.assertEqual(r.passages("1", T0)["statut"], "erreur")
+        self.assertTrue(r.bloque)
+        self.assertEqual(r.passages("2", T0 + timedelta(minutes=14))["statut"], "bloqué")
+        self.assertEqual(r.passages("3", T0 + timedelta(minutes=15, seconds=1))["statut"], "ok")
+        self.assertFalse(r.bloque)
+        self.assertEqual(len(f.appels), 2)
+
+    def test_blocage_401_dure_six_heures(self):
+        f = Fausse([ErreurPrim("HTTP 401", 401), reponse(), reponse()])
+        r = ReleveurGares(f, None, intervalle_s=60)
+        r.passages("1", T0)
+        self.assertEqual(r.passages("2", T0 + timedelta(hours=5, minutes=59))["statut"], "bloqué")
+        self.assertEqual(r.passages("3", T0 + timedelta(hours=6, seconds=1))["statut"], "ok")
+
+
 if __name__ == "__main__":
     unittest.main()
