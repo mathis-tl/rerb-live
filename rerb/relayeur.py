@@ -7,7 +7,8 @@ Commandes Upstash par requête (l'appel PRIM n'est pas une commande Upstash) :
 • sinon : 1 lecture sans la mémoire (MGET) ;
 • rafraîchissement, après cette lecture : SET NX (verrou), MGET sous verrou (mémoire et compteur du jour), INCR (+ EXPIRE
   au premier appel du jour), MSET de l'état, EVAL (libération) = 6 ; +1 EXPIRE le premier appel du jour ; +1 SET EX quand
-  un blocage est écrit. La mémoire n'est réécrite que si elle a changé.
+  un blocage est écrit. La mémoire n'est réécrite que si elle a changé. Les en-têtes de quota PRIM (`quota_prim`, T6a)
+  rejoignent ce même MSET : aucune commande de plus.
 
 # INVARIANT : aucune écriture d'état (relevé, lissage, mémoire) quand l'appel PRIM a échoué ou quand la mémoire dépasse
 #             TAILLE_MAX_OCTETS. L'ancien état reste servi.
@@ -29,6 +30,7 @@ from serveur import (CLE_BLOCAGE, CLE_DERNIERE_TENTATIVE, FENETRE_NUIT, INTERVAL
 CACHE_LOCAL_S = 20   # délai de cache quand aucune échéance n'est connue (relevé périmé, échec, magasin en panne)
 CLE_RELEVE, CLE_LISSEUR, CLE_MEMOIRE, CLE_DERNIERE_ERREUR = "releve", "lisseur", "memoire", "derniere_erreur"
 CLE_UTILISES = "plafond_utilises"   # compteur PRIM du jour, recopié à chaque rafraîchissement dans le même MSET : aucune commande de plus
+CLE_QUOTA = "quota_prim"            # en-têtes de quota PRIM reçus au dernier appel : {"recu": ISO, "entetes": {...}} (ticket T6a)
 CLES_LECTURE = (CLE_RELEVE, CLE_LISSEUR, CLE_BLOCAGE, CLE_DERNIERE_TENTATIVE, CLE_DERNIERE_ERREUR, CLE_UTILISES)   # sans la mémoire
 ERREURS_LECTURE = (KeyError, IndexError, TypeError, ValueError, AttributeError, http.client.HTTPException)
 
@@ -87,6 +89,12 @@ def _copie_memoire(memoire):
     return copie
 
 
+def _bloc_quota(instant, quota):
+    """Valeur de la clé `quota_prim` ; None quand aucune réponse PRIM n'a fourni d'en-têtes (rien n'est écrit, l'ancienne valeur reste).
+    # INVARIANT : `quota_prim` rejoint le MSET existant (succès et échec) : 0 commande Upstash de plus."""
+    return None if quota is None else {"recu": instant.isoformat(), "entetes": quota}
+
+
 def _horizon(etat):
     """Dernier instant où le relevé a été reçu ou une tentative faite : c'est lui qui fixe la prochaine actualisation."""
     dates = [d for d in (None if etat.releve is None else etat.releve.recu, etat.derniere) if d is not None]
@@ -96,9 +104,12 @@ def _horizon(etat):
 class Relayeur:
     """`fetch()` -> livraison PRIM décodée, ou lève ErreurPrim (serveur.py). `magasin` : MagasinUpstash en production."""
 
-    def __init__(self, magasin, fetch, maximum=PLAFOND_JOUR, intervalle_s=INTERVALLE_S, fenetre_nuit=FENETRE_NUIT):
+    def __init__(self, magasin, fetch, maximum=PLAFOND_JOUR, intervalle_s=INTERVALLE_S, fenetre_nuit=FENETRE_NUIT, quota=None):
+        """`quota` (facultatif) : fonction sans argument qui renvoie les en-têtes de quota de la dernière réponse PRIM réussie
+        (None si inconnus). Les en-têtes d'une réponse d'erreur viennent de `ErreurPrim.quota`."""
         self._magasin = magasin
         self._fetch = fetch
+        self._quota = quota
         self._plafond = Plafond(magasin, maximum)
         self._intervalle = timedelta(seconds=intervalle_s)
         self._fenetre_nuit = fenetre_nuit
@@ -208,9 +219,10 @@ class Relayeur:
             memoire = _copie_memoire(etat.memoire)   # la consolidation ne doit pas toucher l'état local si rien n'est écrit
             trains = consolider_livraison(livraison, memoire)
         except ErreurPrim as erreur:
-            return self._echec(etat, maintenant, str(erreur), erreur.statut)
+            return self._echec(etat, maintenant, str(erreur), erreur.statut, erreur.quota)
         except ERREURS_LECTURE as erreur:
-            return self._echec(etat, maintenant, f"réponse illisible ({type(erreur).__name__})", None)
+            return self._echec(etat, maintenant, f"réponse illisible ({type(erreur).__name__})", None, self._lire_quota())
+        quota = self._lire_quota()
         memoire.purger(maintenant)
         lisseur = _copie_lisseur(etat.lisseur)
         lisseur.avancer({ref: train for ref, (train, _retards) in trains.items()}, maintenant)
@@ -219,7 +231,7 @@ class Relayeur:
         taille = memoire.taille_export()
         if taille > TAILLE_MAX_OCTETS:
             erreur = f"mémoire trop grosse ({taille} octets > {TAILLE_MAX_OCTETS}) : état non écrit"
-            self._ecrire_echec(maintenant, erreur, etat.utilises)
+            self._ecrire_echec(maintenant, erreur, etat.utilises, quota)
             return self._vue(etat, maintenant, erreur=erreur)
         ecriture = {
             CLE_RELEVE: compresser_json(releve.exporter()),
@@ -228,6 +240,8 @@ class Relayeur:
             CLE_DERNIERE_ERREUR: None,
             CLE_UTILISES: etat.utilises,
         }
+        if (bloc := _bloc_quota(maintenant, quota)) is not None:
+            ecriture[CLE_QUOTA] = bloc
         # La mémoire (la valeur la plus lourde) n'est réécrite que si elle a changé, ou si elle ne vit que dans cette copie.
         if self._local is not None or exportee != etat.memoire.exporter():
             ecriture[CLE_MEMOIRE] = compresser_json(exportee)
@@ -240,16 +254,22 @@ class Relayeur:
         self._local = None
         return Vue(None, releve, lisseur, None, False, self._prochain_changement(maintenant, None, maintenant), etat.utilises)
 
-    def _echec(self, etat, maintenant, message, statut):
+    def _lire_quota(self):
+        return None if self._quota is None else self._quota()
+
+    def _echec(self, etat, maintenant, message, statut, quota=None):
         bloque = statut in STATUTS_CLE_REFUSEE
         blocage_jusqu = None
         if bloque:
             duree = duree_blocage(statut)
             blocage_jusqu = maintenant + timedelta(seconds=duree)
             self._magasin.ecrire(CLE_BLOCAGE, {"statut": statut, "jusqu": blocage_jusqu.isoformat()}, ttl_s=duree)
-        self._ecrire_echec(maintenant, message, etat.utilises)
+        self._ecrire_echec(maintenant, message, etat.utilises, quota)
         return Vue(None, etat.releve, etat.lisseur, message, bloque,
                    self._prochain_changement(maintenant, blocage_jusqu, maintenant), etat.utilises)
 
-    def _ecrire_echec(self, maintenant, message, utilises):
-        self._magasin.ecrire_groupe({CLE_DERNIERE_TENTATIVE: maintenant.isoformat(), CLE_DERNIERE_ERREUR: message, CLE_UTILISES: utilises})
+    def _ecrire_echec(self, maintenant, message, utilises, quota=None):
+        valeurs = {CLE_DERNIERE_TENTATIVE: maintenant.isoformat(), CLE_DERNIERE_ERREUR: message, CLE_UTILISES: utilises}
+        if (bloc := _bloc_quota(maintenant, quota)) is not None:
+            valeurs[CLE_QUOTA] = bloc
+        self._magasin.ecrire_groupe(valeurs)

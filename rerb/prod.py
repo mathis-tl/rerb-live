@@ -14,10 +14,10 @@ from duree_troncon import fournisseur_duree_min
 from gare import ReleveurGares
 from magasin import ErreurMagasin
 from magasin_upstash import MagasinUpstash
-from relayeur import Relayeur
+from relayeur import CLE_QUOTA, Relayeur
 from serveur import (CLE_BLOCAGE, CSV_GARES, DELAI_PRIM_S, EN_TETES, FENETRE_NUIT, PLAFOND_JOUR, TABLE_DUREES, TRACE,
-                     URL_PRIM_ET, URL_PRIM_SM_GARE, ErreurPrim, _charger, appeler_prim, calculer_trains, construire_contexte,
-                     corps_trains, duree_blocage, est_nuit, ref_gare)
+                     URL_PRIM_ET, URL_PRIM_SM_GARE, ErreurPrim, Plafond, _charger, appeler_prim, appeler_prim_avec_quota,
+                     calculer_trains, construire_contexte, corps_trains, duree_blocage, est_nuit, ref_gare)
 
 CACHE_TRAINS = "public, s-maxage=5, stale-while-revalidate=10"   # décision T5 : CDN 5 s, requête locale 20 s (relayeur)
 CACHE_GARE = "public, s-maxage=60"                               # une gare : une réponse PRIM au plus par minute et par gare
@@ -54,6 +54,7 @@ class Services:
     def __init__(self, env, http=None, appeler=None, horloge=None):
         self.horloge = horloge or (lambda: datetime.now(timezone.utc))
         self._appeler = appeler or appeler_prim
+        self._quota_dernier = None   # en-têtes de quota du dernier appel PRIM de /trains (diagnostic T6a)
         url, jeton = _premier(env, NOMS_URL), _premier(env, NOMS_JETON)
         self.magasin = MagasinUpstash(url, jeton, http=http) if url and jeton else None
         self.cle = env.get("PRIM_API_KEY") or None
@@ -64,14 +65,25 @@ class Services:
             manquant.append("clé PRIM absente (PRIM_API_KEY) : aucun appel PRIM")
         self.erreur_configuration = " ; ".join(manquant) or None
         self.erreur_cle = None if self.cle else "clé PRIM absente (PRIM_API_KEY) : aucun appel PRIM"
-        self.relayeur = Relayeur(self.magasin, self._fetch_trains) if self.magasin is not None else None
+        self.relayeur = (Relayeur(self.magasin, self._fetch_trains, quota=lambda: self._quota_dernier)
+                         if self.magasin is not None else None)
         self.releveur_gares = ReleveurGares(self._fetch_gare, None)   # pas de plafond propre : liste blanche + CDN (spec déploiement)
         self.gares = {numero: gare.name for numero, gare in _charger(CSV_GARES, TRACE)[0].items()}
         self.distance, self.localiser, self.nom_gare = construire_contexte(CSV_GARES, TRACE)
         self.duree_min = fournisseur_duree_min(TABLE_DUREES)
 
     def _fetch_trains(self):
-        return self._appeler(self.cle, URL_PRIM_ET, delai=DELAI_PRIM_S)
+        self._quota_dernier = None   # l'appel qui suit fixe le quota (None si la réponse n'en porte pas)
+        return self._appel_prim_avec_quota(self.cle, URL_PRIM_ET, DELAI_PRIM_S)
+
+    def _appel_prim_avec_quota(self, cle, url, delai):
+        """Appel PRIM réel : retient les en-têtes de quota (ticket T6a). Un `appeler` injecté (tests, banc) ne renvoie que la
+        livraison : aucun quota n'est retenu, et la réponse /trains ne change pas dans les deux cas.
+        # INVARIANT : la réponse /trains reste identique octet pour octet (T6a) ; seul le relayeur lit `_quota_dernier`."""
+        if self._appeler is appeler_prim:
+            livraison, self._quota_dernier = appeler_prim_avec_quota(cle, url, delai)
+            return livraison
+        return self._appeler(cle, url, delai=delai)
 
     def _fetch_gare(self, gare):
         numero = gare.split(":")[3]   # « STIF:StopArea:SP:<numero>: »
@@ -110,6 +122,23 @@ def reponse_gare(svc, ref):
     return corps(resultat["statut"], resultat["passages"], resultat["age_s"], resultat["erreur"], svc.releveur_gares.bloque)
 
 
+def reponse_quota(svc, diagnostic):
+    """Diagnostic `/quota` (ticket T6a) : dernier quota PRIM journalisé et compteur du jour. Une seule commande Upstash
+    (MGET), aucun appel PRIM. Sans `diagnostic` (RERB_DIAGNOSTIC=1 absent) : 404, comme une route inexistante.
+    # INVARIANT : /quota n'appelle jamais PRIM et n'écrit rien ; une seule commande Upstash par requête."""
+    if not diagnostic:
+        return 404, {"erreur": "introuvable"}
+    if svc.magasin is None:
+        return 503, {"erreur": svc.erreur_configuration}
+    try:
+        quota, compte = svc.magasin.lire_plusieurs([CLE_QUOTA, Plafond(svc.magasin, PLAFOND_JOUR, horloge=svc.horloge).cle()])
+    except ErreurMagasin:
+        return 503, {"erreur": "stockage indisponible"}
+    quota = quota if isinstance(quota, dict) else {}
+    return 200, {"recu": quota.get("recu"), "entetes": quota.get("entetes"), "compteur_jour": compte or 0,
+                 "maximum": PLAFOND_JOUR}
+
+
 def envoyer(requete, code, corps, cache):
     """Réponse JSON : en-têtes de sécurité communs (EN_TETES), Cache-Control propre à la route, un seul en-tête par nom."""
     octets = json.dumps(corps, ensure_ascii=False).encode("utf-8")
@@ -121,5 +150,5 @@ def envoyer(requete, code, corps, cache):
     requete.wfile.write(octets)
 
 
-__all__ = ["CACHE_GARE", "CACHE_SANS_CACHE", "CACHE_TRAINS", "Services", "ecrire_blocage", "envoyer", "ref_gare", "reponse_gare",
-           "reponse_trains"]
+__all__ = ["CACHE_GARE", "CACHE_SANS_CACHE", "CACHE_TRAINS", "Services", "ecrire_blocage", "envoyer", "reponse_quota", "ref_gare",
+           "reponse_gare", "reponse_trains"]

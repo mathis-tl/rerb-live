@@ -465,6 +465,44 @@ def _decaler(x, suffixe, delta):
 
 
 @unittest.skipUnless((DONNEES_PALAISEAU / "prim_estimated_timetable").is_dir(), "données de Palaiseau absentes")
+class TestQuotaPrim(unittest.TestCase):
+    """Quota PRIM journalisé (ticket T6a) : `quota_prim` rejoint le MSET existant, aucune commande Upstash de plus."""
+    ENTETES = {"x-ratelimit-remaining": "1299", "x-ratelimit-reset": "1795000000"}
+
+    def test_quota_ecrit_dans_le_mset_sans_commande_de_plus(self):
+        m = Monde()
+        Relayeur(m.magasin, m.prim, quota=lambda: dict(self.ENTETES)).lire(m.maintenant())
+        self.assertEqual(m.commandes(), ["MGET", "SET", "MGET", "INCR", "EXPIRE", "MSET", "EVAL"])
+        mset = next(c for c in m.faux.commandes if c[0] == "MSET")
+        self.assertIn("rerb:quota_prim", mset[1::2])
+        self.assertEqual(json.loads(m.faux.valeurs["rerb:quota_prim"][0]), {"recu": m.maintenant().isoformat(), "entetes": self.ENTETES})
+
+    def test_sans_source_de_quota_aucune_cle_de_quota(self):
+        m = Monde()
+        m.copie().lire(m.maintenant())
+        self.assertNotIn("rerb:quota_prim", m.faux.valeurs)
+
+    def test_429_ecrit_le_quota_dans_le_groupe_de_l_echec(self):
+        m = Monde()
+        m.prim.erreur = ErreurPrim("HTTP 429", 429, quota={"retry-after": "900", "x-ratelimit-remaining": "0"})
+        Relayeur(m.magasin, m.prim).lire(m.maintenant())
+        msets = [c for c in m.faux.commandes if c[0] == "MSET"]
+        self.assertEqual(len(msets), 1)
+        self.assertIn("rerb:quota_prim", msets[0][1::2])
+        self.assertIn("rerb:derniere_erreur", msets[0][1::2])
+        self.assertEqual(json.loads(m.faux.valeurs["rerb:quota_prim"][0])["entetes"], {"retry-after": "900", "x-ratelimit-remaining": "0"})
+
+    def test_erreur_sans_en_tetes_garde_le_quota_precedent(self):
+        m = Monde()
+        r = Relayeur(m.magasin, m.prim, quota=lambda: dict(self.ENTETES))
+        r.lire(m.maintenant())
+        avant = m.faux.valeurs["rerb:quota_prim"][0]
+        m.t += INTERVALLE_S
+        m.prim.erreur = ErreurPrim("réseau (TimeoutError)")
+        r.lire(m.maintenant())
+        self.assertEqual(m.faux.valeurs["rerb:quota_prim"][0], avant)
+
+
 class TestVingtHeuresDeRejeu(unittest.TestCase):
     """Relevés réels de Palaiseau (environ 2 h, 59 relevés) répétés dix fois, soit environ 20 h, identifiants de course et
     horodatages décalés à chaque répétition : la purge de 4 h et la garde de 2 Mo doivent tenir."""

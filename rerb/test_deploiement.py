@@ -48,6 +48,10 @@ class TestVercelJson(unittest.TestCase):
         self.assertEqual(routes["/trains"], "/api/trains")
         self.assertEqual(routes["/gare"], "/api/gare")
 
+    def test_route_quota_de_diagnostic(self):
+        routes = {r["source"]: r["destination"] for r in self.config["rewrites"]}
+        self.assertEqual(routes["/quota"], "/api/quota")
+
     def test_en_tetes_de_securite_identiques_a_en_tetes(self):
         # une seule règle globale pour la sécurité ; Cache-Control est propre à chaque chemin (règles ci-dessous)
         globale = next(h for h in self.config["headers"] if h["source"] == "/(.*)")

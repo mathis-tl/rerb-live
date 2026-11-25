@@ -20,7 +20,8 @@ from position import Etat
 from gare import ReleveurGares
 from magasin import ErreurMagasin, MagasinFaux, MagasinLocal
 from serveur import (CLE_BLOCAGE, CSV_GARES, DEMI_VOIE_M, DELAI_PRIM_S, FENETRE_NUIT, INTERVALLE_S, NOM_VERROU, NUIT_DEBUT_H, NUIT_FIN_H,
-                     PARIS, PLAFOND_JOUR, TRACE, VERROU_S, ErreurPrim, appeler_prim, jour_paris, Plafond, Releve, Releveur, calculer_trains,
+                     PARIS, PLAFOND_JOUR, TRACE, VERROU_S, ErreurPrim, appeler_prim, appeler_prim_avec_quota, jour_paris, Plafond, Releve,
+                     Releveur, calculer_trains,
                      chaine_demo, charger_geo, construire_contexte, consolider_livraison, creer_serveur, lire_cle)
 
 T0 = datetime(2026, 11, 16, 10, 0, 0, tzinfo=timezone.utc)
@@ -626,6 +627,67 @@ class TestAppelerPrim(unittest.TestCase):
         base, vus = self.serveur(h)
         self.assertEqual(appeler_prim("CLE-DE-TEST", base + "/x"), {"ok": 1})
         self.assertEqual(vus[0][1], "CLE-DE-TEST")
+
+
+class TestQuotaPrim(unittest.TestCase):
+    """En-têtes de quota PRIM (ticket T6a) : liste blanche stricte, valeurs tronquées, aucune clé."""
+    CLE = "CLE-DE-TEST-QUOTA-7d1e"
+
+    def serveur(self, comportement):
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                comportement(self)
+
+            def log_message(self, *a):
+                pass
+        s = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+        self.addCleanup(s.server_close)
+        self.addCleanup(s.shutdown)
+        return f"http://127.0.0.1:{s.server_address[1]}"
+
+    @staticmethod
+    def reponse(req, statut, entetes, corps=b'{"Siri":{"ServiceDelivery":{"ok":1}}}'):
+        req.send_response(statut)
+        for nom, valeur in entetes:
+            req.send_header(nom, valeur)
+        req.send_header("Content-Length", str(len(corps)))
+        req.end_headers()
+        req.wfile.write(corps)
+
+    def test_seuls_les_en_tetes_de_quota_sortent_en_minuscules(self):
+        def h(req):
+            self.reponse(req, 200, [("X-RateLimit-Limit", "1300"), ("X-RateLimit-Remaining", "1299"),
+                                    ("X-RateLimit-Reset", "1795000000"), ("X-Autre-Secret", "ne-pas-garder"),
+                                    ("apikey", self.CLE)])
+        livraison, quota = appeler_prim_avec_quota(self.CLE, self.serveur(h) + "/x")
+        self.assertEqual(livraison, {"ok": 1})
+        self.assertEqual(quota, {"x-ratelimit-limit": "1300", "x-ratelimit-remaining": "1299", "x-ratelimit-reset": "1795000000"})
+
+    def test_valeur_tronquee_a_64_caracteres(self):
+        def h(req):
+            self.reponse(req, 200, [("X-RateLimit-Reset", "9" * 200)])
+        _, quota = appeler_prim_avec_quota(self.CLE, self.serveur(h) + "/x")
+        self.assertEqual(quota["x-ratelimit-reset"], "9" * 64)
+
+    def test_429_porte_retry_after_et_quota(self):
+        def h(req):
+            self.reponse(req, 429, [("Retry-After", "900"), ("X-RateLimit-Remaining", "0"), ("X-Autre-Secret", "non")], b"{}")
+        with self.assertRaises(ErreurPrim) as cm:
+            appeler_prim_avec_quota(self.CLE, self.serveur(h) + "/x")
+        self.assertEqual(cm.exception.statut, 429)
+        self.assertEqual(cm.exception.quota, {"retry-after": "900", "x-ratelimit-remaining": "0"})
+        self.assertNotIn(self.CLE, str(cm.exception))
+
+    def test_erreur_reseau_sans_quota(self):
+        with self.assertRaises(ErreurPrim) as cm:
+            appeler_prim_avec_quota(self.CLE, "http://127.0.0.1:9/x", delai=1)
+        self.assertIsNone(cm.exception.quota)
+
+    def test_appeler_prim_garde_son_contrat(self):
+        def h(req):
+            self.reponse(req, 200, [("X-RateLimit-Limit", "1300")])
+        self.assertEqual(appeler_prim(self.CLE, self.serveur(h) + "/x"), {"ok": 1})
 
 
 class TestReleveur(unittest.TestCase):

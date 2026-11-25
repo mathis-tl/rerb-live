@@ -85,11 +85,13 @@ PLAFOND_GARES_JOUR = 5000   # quota PRIM stop-monitoring : 1 000 000 par jour
 
 
 class ErreurPrim(Exception):
-    """Échec d'un appel PRIM ; `statut` = code HTTP si connu (jamais d'information secrète dans le message)."""
+    """Échec d'un appel PRIM ; `statut` = code HTTP si connu (jamais d'information secrète dans le message).
+    `quota` : en-têtes de quota reçus avec la réponse d'erreur (HTTP), None si aucune réponse n'a été reçue."""
 
-    def __init__(self, message, statut=None):
+    def __init__(self, message, statut=None, quota=None):
         super().__init__(message)
         self.statut = statut
+        self.quota = quota
 
 
 VERSION_RELEVE = 1
@@ -466,22 +468,44 @@ _OUVREUR_SANS_REDIRECTION = urllib.request.build_opener(_SansRedirection)
 TAILLE_MAX_REPONSE = 60_000_000      # octets ; l'estimated-timetable du RER B fait ~1 Mo
 
 
-def appeler_prim(cle, url=URL_PRIM_ET, delai=DELAI_PRIM_S):
-    """Un appel GET PRIM -> JSON décodé. Le message d'erreur ne contient ni la clé ni les en-têtes."""
+QUOTA_LONGUEUR_MAX = 64   # une valeur d'en-tête de quota est un nombre ou une date : au-delà, c'est anormal et on la coupe
+
+
+def quota_depuis(entetes):
+    """Liste blanche des en-têtes de quota PRIM : `x-ratelimit*` et `retry-after`, noms en minuscules, valeurs tronquées.
+    Tout autre en-tête (et la clé `apikey`) est ignoré.
+    # INVARIANT : aucune valeur d'en-tête hors liste blanche n'est stockée ni exposée ; `apikey` n'apparaît jamais ici."""
+    sortie = {}
+    for nom, valeur in (entetes or {}).items():
+        minuscules = nom.lower()
+        if minuscules.startswith("x-ratelimit") or minuscules == "retry-after":
+            sortie[minuscules] = str(valeur)[:QUOTA_LONGUEUR_MAX]
+    return sortie
+
+
+def appeler_prim_avec_quota(cle, url=URL_PRIM_ET, delai=DELAI_PRIM_S):
+    """Un appel GET PRIM -> (ServiceDelivery décodé, quota). `quota` : voir `quota_depuis`. Le message d'erreur ne contient
+    ni la clé ni les en-têtes."""
     requete = urllib.request.Request(url, headers={"apikey": cle, "Accept": "application/json"})
     try:
         # Aucune redirection suivie : l'en-tête `apikey` ne doit jamais partir vers une autre adresse.
         with _OUVREUR_SANS_REDIRECTION.open(requete, timeout=delai) as r:
+            quota = quota_depuis(r.headers)
             corps = r.read(TAILLE_MAX_REPONSE + 1)
             if len(corps) > TAILLE_MAX_REPONSE:
                 raise ErreurPrim("réponse trop grande")
-            return json.loads(corps)["Siri"]["ServiceDelivery"]
+            return json.loads(corps)["Siri"]["ServiceDelivery"], quota
     except urllib.error.HTTPError as e:
-        raise ErreurPrim(f"HTTP {e.code}", e.code) from None
+        raise ErreurPrim(f"HTTP {e.code}", e.code, quota=quota_depuis(e.headers)) from None
     except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
         raise ErreurPrim(f"réseau ({type(e).__name__})") from None
     except (ValueError, KeyError, TypeError) as e:
         raise ErreurPrim(f"réponse illisible ({type(e).__name__})") from None
+
+
+def appeler_prim(cle, url=URL_PRIM_ET, delai=DELAI_PRIM_S):
+    """Un appel GET PRIM -> JSON décodé (sans le quota). Le message d'erreur ne contient ni la clé ni les en-têtes."""
+    return appeler_prim_avec_quota(cle, url, delai)[0]
 
 
 def fichier_statique(racine, chemin_url):
