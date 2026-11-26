@@ -54,6 +54,14 @@ Environ 700 tests, sans réseau ni clé.
 
 `vercel.json` pose les en-têtes de sécurité (CSP stricte, HSTS, `nosniff`, `no-referrer`) et les règles de cache.
 
+**Quand déployer.** Un déploiement remplace les copies de la fonction : la première requête sur une copie neuve prend environ 4 s (appel PRIM compris), le temps que l'état partagé soit relu. Aucune donnée n'est perdue (l'état est dans Upstash), mais mieux vaut éviter les heures où la carte est la plus consultée. Heures de Paris :
+
+| Plage | Déploiement |
+|---|---|
+| 06 h 30 à 09 h 30 et 16 h 30 à 19 h 30 | à éviter (pointe) |
+| 09 h 30 à 16 h 30 et 19 h 30 à 01 h 00 | acceptable |
+| 01 h 00 à 05 h 00 | idéal (pas de service, personne n'est touché) |
+
 ## Données et licences
 
 - **PRIM** : horaires temps réel, Licence Mobilités.
