@@ -54,6 +54,8 @@ Environ 700 tests, sans réseau ni clé.
 
 `vercel.json` pose les en-têtes de sécurité (CSP stricte, HSTS, `nosniff`, `no-referrer`) et les règles de cache.
 
+Les déploiements automatiques par push sont désactivés (`git.deploymentEnabled` dans `vercel.json`) : la production ne change que par `vercel deploy --prod`.
+
 **Quand déployer.** Un déploiement remplace les copies de la fonction : la première requête sur une copie neuve prend environ 4 s (appel PRIM compris), le temps que l'état partagé soit relu. Aucune donnée n'est perdue (l'état est dans Upstash), mais mieux vaut éviter les heures où la carte est la plus consultée. Heures de Paris :
 
 | Plage | Déploiement |
