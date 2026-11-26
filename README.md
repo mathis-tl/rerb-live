@@ -1,13 +1,64 @@
-# rerb-live
+# RER B en direct
 
-Où est physiquement le RER B que j'attends ? Une carte qui estime la position des trains à partir des données temps réel PRIM (Île-de-France Mobilités). Premier arrêt : Massy - Palaiseau.
+Où est le RER B que j'attends ? Une carte 3D qui place les trains de la ligne B sur leur tracé, à partir des horaires temps réel d'Île-de-France Mobilités (PRIM).
 
-**État (18/11/2026) :** carte 3D avec modèles Z 8100, navigation, recherche de gare, suivi de train, terminus en rouge (commit 9e09079) ; rame articulée dans les courbes (non commité). Relevé de vérité terrain à Palaiseau le 18/11 : arrêt réel ≈ 23 s contre 63 à 77 s annoncés, arrivée PRIM à ±46 s ; prochaine étape : séjour à quai réduit (25 s, 30 s dans les gares denses), voir `docs/recap-releve-palaiseau-18-11.md`. Historique : investigation, collecte 1 (24 h) et collecte 2 (47 gares) terminées. **Tâche 4 en cours** : J1 à J4 faits (lat/lon sur un tronçon ; vérité RER B à Massy puis sur 47 gares, état « à quai » estimé inquiétant, départ à ±1 min mais en avance de 53 s ; serveur local ; carte 3D deck.gl avec décor OpenStreetMap de toute la ligne, panneau « prochains trains à une gare », limite de vitesse à 33 m/s). Lancer sans PRIM : `python3 rerb/serveur.py --demo` puis http://127.0.0.1:8765/ ; avec PRIM : sans `--demo` (clé dans `.env`). **Problème connu :** PRIM annonce des horaires impossibles sur quelques tronçons (2 % des trajets, ex. Massy - Palaiseau → Palaiseau en 30 s pour 1 435 m) ; `stop-monitoring` donne les mêmes heures (test du 16/11, `docs/plan-tache-4.md` §20). **Prochaine étape :** durée minimale plausible par tronçon, mesurée sur les relevés déjà enregistrés (§21). Estimation de position niveau 1 : `rerb/position.py` avec mémoire des gares retirées (`rerb/memoire.py`) ; erreur mesurée sur Boston et Helsinki (13/11, un seul jour) : médiane 350 m et 276 m, valable pour la méthode, pas pour le RER B (`docs/recap-mesure-boston-helsinki.md`). Source de vérité du plan : `docs/plan-tache-4.md` ; reprise de session : `docs/prompt-de-reprise.md`.
+**https://rerb-live.vercel.app**
 
-## Principe visé
-Position **estimée** (pas GPS) : horaires estimés à chaque arrêt (PRIM `estimated-timetable`) + tracé de la ligne (open data IDFM) → interpolation entre deux gares. La qualité de cette estimation se mesure sur des réseaux qui publient aussi le GPS (Boston, Helsinki), d'où la collecte de 24 h déjà faite. Pour le RER B, la vérité vient de `VehicleAtStop` (train à quai) de `stop-monitoring`.
+![Parcours de la carte : accueil, carte 3D, recherche d'une gare, prochains trains, fiche d'une rame](assets/demo.gif)
 
-## Avertissements
-- Quotas PRIM par API (en-têtes du 12/11/2026) : `estimated-timetable` 1 500 requêtes par jour, `stop-monitoring` 1 000 000 par jour.
-- Licences vérifiées par Mathis le 24/11/2026 (ODbL pour OSM, Licence Mobilités pour PRIM, Licence Ouverte 2.0 pour IGN) : publication du site autorisée côté licences. Aucune donnée brute d'historique ne se publie (ODbL, MassDOT, HSL).
-- Les clés (`PRIM_API_KEY`, `MBTA_API_KEY`) vont dans `.env` (ignoré par git), jamais dans le dépôt. Modèle : `.env.example`.
+**La position est estimée, pas mesurée.** PRIM ne publie pas de GPS pour le RER B, seulement les heures de passage prévues et révisées à chaque gare. La carte interpole entre deux gares le long du tracé réel de la ligne. L'erreur dépend de la précision des heures annoncées ; un train dont la position n'est pas fiable est signalé comme tel.
+
+## Ce que montre la carte
+
+- les rames en 3D (modèle Z 8100) sur le tracé, avec un code couleur d'état : à quai, en route, terminé, données anciennes ou position inconnue ;
+- le décor 3D de la ligne (bâtiments OpenStreetMap, hauteurs de la BD TOPO de l'IGN) ;
+- la recherche d'une gare et les prochains trains qui y passent ;
+- le suivi d'un train, le filtre par direction, le passage 2D / 3D, la légende et le niveau de précision.
+
+## Comment ça marche
+
+```
+PRIM (estimated-timetable) → relevé toutes les 60 s → lissage des heures → position à l'instant t → /trains → carte (deck.gl)
+```
+
+- `rerb/` : la logique, en bibliothèque standard Python seulement (pas de dépendance à installer). `position.py` estime la position, `lissage.py` évite les sauts quand PRIM révise une heure, `gare.py` sert les prochains trains d'une gare.
+- `web/` : le site statique (deck.gl 9.4.1, polices et données servies en local, aucun CDN).
+- `api/` : les trois fonctions Vercel (`/trains`, `/gare`, `/sante`). Elles partagent leur état (relevé, lissage, compteurs, verrou) dans Upstash Redis, de sorte que plusieurs copies de la fonction ne font jamais plus d'un appel PRIM par minute.
+- `outils/` : génération des fichiers du site (`generer_geo.py`, scripts du décor 3D) et banc de mesure de la fluidité.
+
+Garde-fous sur le quota PRIM (1 500 requêtes par jour pour cette API) : un appel par minute au plus, aucun appel entre 01 h et 05 h (heure de Paris, pas de service), plafond de 1 300 appels par jour, blocage de 15 min après un 429 et de 6 h après un 401 ou 403, et jamais d'appel si le stockage est indisponible.
+
+## Lancer en local
+
+Sans clé PRIM, avec des trains inventés :
+
+```bash
+python3 rerb/serveur.py --demo
+```
+
+puis http://127.0.0.1:8765/. Avec les vraies données, copier `.env.example` en `.env`, renseigner `PRIM_API_KEY` (clé gratuite sur [prim.iledefrance-mobilites.fr](https://prim.iledefrance-mobilites.fr)), puis lancer `python3 rerb/serveur.py`.
+
+## Tests
+
+```bash
+bash .claude/check.sh
+```
+
+Environ 700 tests, sans réseau ni clé.
+
+## Déployer sur Vercel
+
+1. Créer le projet à partir de ce dépôt (le dossier de sortie est `web/`, voir `vercel.json`).
+2. Ajouter une base Upstash Redis depuis le Marketplace Vercel (variables `KV_REST_API_*`).
+3. Définir `PRIM_API_KEY` en variable d'environnement de production (type sensible).
+
+`vercel.json` pose les en-têtes de sécurité (CSP stricte, HSTS, `nosniff`, `no-referrer`) et les règles de cache.
+
+## Données et licences
+
+- **PRIM** : horaires temps réel, Licence Mobilités.
+- **OpenStreetMap** : décor et fond de carte, ODbL. © les contributeurs d'OpenStreetMap.
+- **BD TOPO** (IGN) : hauteurs des bâtiments, Licence Ouverte 2.0.
+- **deck.gl** (MIT) et polices Barlow et IBM Plex Mono (SIL OFL 1.1) : provenance et sommes de contrôle dans `web/vendor/VERSIONS.md` et `web/fonts/VERSIONS.md`.
+
+Aucune donnée brute d'historique n'est publiée dans ce dépôt. Les clés vont dans `.env` (ignoré par git), jamais dans le dépôt.
