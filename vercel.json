@@ -3,8 +3,7 @@
   "outputDirectory": "web",
   "rewrites": [
     { "source": "/trains", "destination": "/api/trains" },
-    { "source": "/gare", "destination": "/api/gare" },
-    { "source": "/quota", "destination": "/api/quota" }
+    { "source": "/gare", "destination": "/api/gare" }
   ],
   "headers": [
     {

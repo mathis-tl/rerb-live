@@ -122,23 +122,6 @@ def reponse_gare(svc, ref):
     return corps(resultat["statut"], resultat["passages"], resultat["age_s"], resultat["erreur"], svc.releveur_gares.bloque)
 
 
-def reponse_quota(svc, diagnostic):
-    """Diagnostic `/quota` (ticket T6a) : dernier quota PRIM journalisé et compteur du jour. Une seule commande Upstash
-    (MGET), aucun appel PRIM. Sans `diagnostic` (RERB_DIAGNOSTIC=1 absent) : 404, comme une route inexistante.
-    # INVARIANT : /quota n'appelle jamais PRIM et n'écrit rien ; une seule commande Upstash par requête."""
-    if not diagnostic:
-        return 404, {"erreur": "introuvable"}
-    if svc.magasin is None:
-        return 503, {"erreur": svc.erreur_configuration}
-    try:
-        quota, compte = svc.magasin.lire_plusieurs([CLE_QUOTA, Plafond(svc.magasin, PLAFOND_JOUR, horloge=svc.horloge).cle()])
-    except ErreurMagasin:
-        return 503, {"erreur": "stockage indisponible"}
-    quota = quota if isinstance(quota, dict) else {}
-    return 200, {"recu": quota.get("recu"), "entetes": quota.get("entetes"), "compteur_jour": compte or 0,
-                 "maximum": PLAFOND_JOUR}
-
-
 def envoyer(requete, code, corps, cache):
     """Réponse JSON : en-têtes de sécurité communs (EN_TETES), Cache-Control propre à la route, un seul en-tête par nom."""
     octets = json.dumps(corps, ensure_ascii=False).encode("utf-8")
@@ -150,5 +133,5 @@ def envoyer(requete, code, corps, cache):
     requete.wfile.write(octets)
 
 
-__all__ = ["CACHE_GARE", "CACHE_SANS_CACHE", "CACHE_TRAINS", "Services", "ecrire_blocage", "envoyer", "reponse_quota", "ref_gare",
+__all__ = ["CACHE_GARE", "CACHE_SANS_CACHE", "CACHE_TRAINS", "Services", "ecrire_blocage", "envoyer", "ref_gare",
            "reponse_gare", "reponse_trains"]
