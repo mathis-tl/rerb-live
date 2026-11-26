@@ -67,6 +67,7 @@ Environ 700 tests, sans réseau ni clé.
 - **PRIM** : horaires temps réel, Licence Mobilités.
 - **OpenStreetMap** : décor et fond de carte, ODbL. © les contributeurs d'OpenStreetMap.
 - **BD TOPO** (IGN) : hauteurs des bâtiments, Licence Ouverte 2.0.
+- **MBTA** (Boston, MassDOT) et **HSL** (Helsinki, licence CC BY 4.0) : les premières mesures de la méthode d'estimation ont utilisé leurs données ouvertes de réseau (GTFS), retirées depuis du code mais visibles dans l'historique des anciens commits. Source : MassDOT / MBTA et Helsingin seudun liikenne HSL.
 - **deck.gl** (MIT) et polices Barlow et IBM Plex Mono (SIL OFL 1.1) : provenance et sommes de contrôle dans `web/vendor/VERSIONS.md` et `web/fonts/VERSIONS.md`.
 
 Aucune donnée brute d'historique n'est publiée dans ce dépôt. Les clés vont dans `.env` (ignoré par git), jamais dans le dépôt.
