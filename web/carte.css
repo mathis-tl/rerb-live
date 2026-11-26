@@ -1,4 +1,4 @@
-/* RER B en direct : version jour. Règles de design : docs/anti-slop-design.md (testées par rerb/test_web.py).
+/* RER B en direct : version jour. Règles de design testées par rerb/test_web.py.
    Direction retenue : signalétique (panneau de gare). Les couleurs, filets et polices passent par les variables de :root. */
 
 /* --- polices locales (web/fonts/VERSIONS.md : licence OFL, sommes SHA-256) */

@@ -1,4 +1,4 @@
-"""Relayeur Vercel (T5) : l'état partagé entre les copies de la fonction (relevé, lissage, mémoire, blocage, dernière tentative)
+"""Relayeur Vercel : l'état partagé entre les copies de la fonction (relevé, lissage, mémoire, blocage, dernière tentative)
 passe par le magasin Upstash. Une seule copie appelle PRIM à la fois (verrou), au plus une fois par minute (INTERVALLE_S),
 jamais la nuit, jamais au-delà du plafond journalier.
 
@@ -30,7 +30,7 @@ from serveur import (CLE_BLOCAGE, CLE_DERNIERE_TENTATIVE, FENETRE_NUIT, INTERVAL
 CACHE_LOCAL_S = 20   # délai de cache quand aucune échéance n'est connue (relevé périmé, échec, magasin en panne)
 CLE_RELEVE, CLE_LISSEUR, CLE_MEMOIRE, CLE_DERNIERE_ERREUR = "releve", "lisseur", "memoire", "derniere_erreur"
 CLE_UTILISES = "plafond_utilises"   # compteur PRIM du jour, recopié à chaque rafraîchissement dans le même MSET : aucune commande de plus
-CLE_QUOTA = "quota_prim"            # en-têtes de quota PRIM reçus au dernier appel : {"recu": ISO, "entetes": {...}} (ticket T6a)
+CLE_QUOTA = "quota_prim"            # en-têtes de quota PRIM reçus au dernier appel : {"recu": ISO, "entetes": {...}}
 CLES_LECTURE = (CLE_RELEVE, CLE_LISSEUR, CLE_BLOCAGE, CLE_DERNIERE_TENTATIVE, CLE_DERNIERE_ERREUR, CLE_UTILISES)   # sans la mémoire
 ERREURS_LECTURE = (KeyError, IndexError, TypeError, ValueError, AttributeError, http.client.HTTPException)
 

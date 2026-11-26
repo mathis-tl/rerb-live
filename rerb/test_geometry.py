@@ -1,4 +1,4 @@
-"""Tests de la tâche 3 (géométrie) : distance le long des rails entre deux gares.
+"""Distance le long des rails entre deux gares.
 
 Tests synthétiques (toujours exécutés) puis tests sur les données réelles
 (ignorés si data/ est absent : data/ n'est pas versionné).

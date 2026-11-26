@@ -1,7 +1,7 @@
 // Banc de mesure de la fluidité de la carte (21/11/2026). À exécuter DANS la page, sur la démo (aucun appel PRIM) :
 //   python3 rerb/serveur.py --demo --revisions --port 8768, ouvrir http://127.0.0.1:8768/, cliquer « Voir les trains »,
 //   puis coller ce fichier dans la console (ou l'injecter par l'outil de pilotage du navigateur). Il renvoie un JSON et un verdict.
-// Seuils (docs/plan-ui-ux-et-chargement-a-la-demande.md) : au repos au moins 50 images/s ; en déplacement au moins 45 images/s et au plus 2 tâches longues (> 50 ms).
+// Seuils : au repos au moins 50 images/s ; en déplacement au moins 45 images/s et au plus 2 tâches longues (> 50 ms).
 // Mesuré le 21/11 après correction (fenêtre 1500 x 729, Apple M2) : 51 à 58 images/s partout, au plus 2 tâches longues ; avant : 28 à 37 images/s, jusqu'à 21 tâches longues.
 // Les valeurs absolues dépendent de la machine et de la taille de la fenêtre : ne comparer que des mesures faites dans les mêmes conditions.
 (async () => {

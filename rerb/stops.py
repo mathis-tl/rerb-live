@@ -1,4 +1,4 @@
-"""Tâche 2 : relier une gare de PRIM (StopArea) à ses coordonnées.
+"""Relier une gare de PRIM (StopArea) à ses coordonnées.
 
 Qui fait quoi :
 • stop_area_number : extrait le numéro de "STIF:StopArea:SP:<n>:".

@@ -1,4 +1,4 @@
-"""Tests de la tâche 2 : relier une gare PRIM (StopArea) à ses coordonnées.
+"""Relier une gare PRIM (StopArea) à ses coordonnées.
 
 Les tests sur les échantillons réels sont ignorés si data/ est absent
 (data/ n'est pas versionné).

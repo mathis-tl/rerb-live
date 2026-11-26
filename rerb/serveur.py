@@ -1,8 +1,8 @@
-"""Tâche 4, J3 : serveur local. Cache du dernier relevé PRIM `estimated-timetable`, position recalculée à chaque requête.
+"""Serveur local. Cache du dernier relevé PRIM `estimated-timetable`, position recalculée à chaque requête.
 
-Plan : docs/plan-tache-4.md (J3). Décision S3 (Mathis, 16/11/2026), révisée le 24/11/2026 : au plus 1 appel toutes les 60 s, seulement
+Décision du 16/11/2026, révisée le 24/11/2026 : au plus 1 appel toutes les 60 s, seulement
 quand une requête arrive (carte ouverte), aucun appel de 01:00 à 05:00 (heure de Paris), plafond de 1 300 appels par jour
-(quota PRIM : 1 500). Détails : docs/specs/spec-donnees-prim.md.
+(quota PRIM : 1 500).
 • consolider_livraison : réponse PRIM -> {course: (Train consolidé par la mémoire M2, retards par gare)}.
 • calculer_trains      : relevé + instant -> liste de dicts JSON (état, gare, lat, lon, retard, périmé, âge). Aucun train masqué.
 • Plafond              : compteur d'appels du jour (date de Paris), lu et écrit dans le magasin (rerb/magasin.py).
@@ -171,7 +171,7 @@ def _gare_suivante(train, gare):
 DEMI_VOIE_M = 170.0   # demi-longueur du tracé de voie envoyé avec chaque train : demi-rame (52 m) + déplacement entre deux relevés (≤ 100 m) + marge
 PAS_VOIE_M = 8.0      # un point tous les 8 m : assez fin pour les courbes (rayon ≥ 100 m), corde d'un bogie de 18,5 m
 VITESSE_MAX_MS = 33.0   # 119 km/h : vitesse maximale du RER B (120 km/h) ; plancher de durée (distance / 33) et repli si tronçon inconnu
-TABLE_DUREES = RACINE / "rerb" / "donnees" / "duree_min_troncon.json"   # T1 : durée minimale plausible par tronçon (correction estimée)
+TABLE_DUREES = RACINE / "rerb" / "donnees" / "duree_min_troncon.json"   # durée minimale plausible par tronçon (correction estimée)
 
 
 def _nom_sur(nom_gare, ref):
@@ -186,7 +186,7 @@ def _nom_sur(nom_gare, ref):
 
 OBSERVATION_MIN_S = 600.0   # « Horaire théorique » seulement après 10 min de suivi en relevés PRIM distincts (au moins 5 à 60 s) : un train vu une fois, ou un relevé figé, ne prouve rien
 
-INCERTITUDE_MEDIANE_S = 44.0   # J2 bis (16/11/2026) : médiane de |départ réel - départ estimé|, mesurée à quai (docs/recap-j2bis-verite-gares.md)
+INCERTITUDE_MEDIANE_S = 44.0   # J2 bis (16/11/2026) : médiane de |départ réel - départ estimé|, mesurée à quai
 INCERTITUDE_P90_S = 117.0      # J2 bis : 90e centile. Ordres de grandeur d'un seul jour, pas une erreur mesurée en pleine voie ; biais +53 s non appliqué
 DECALAGES_S = tuple(sorted(set(range(-112, 113, 8)) | {-117, -44, 44, 117}))   # instants échantillonnés autour de `maintenant` (au plus ~8 s, soit ~120 m à 14,7 m/s : la droite entre deux points suit la voie à cette échelle) ; la médiane garde |décalage| <= 44 s
 
@@ -238,7 +238,7 @@ def calculer_trains(releve, maintenant, distance, localiser, nom_gare, duree_min
     (lat, lon, cap en degrés ou None) ; il peut lever une erreur de géométrie : le train reste dans la liste,
     sans position, avec son motif. À quai, `gare_suivante` donne l'orientation de la rame (None au terminus).
     `duree_min(ref_gare, ref_gare_suivante)` -> (secondes, source) ou None (tronçon inconnu) : durée minimale plausible du
-    tronçon (T1, correction estimée). Jamais sous le plancher distance / VITESSE_MAX_MS, qui sert aussi de repli.
+    tronçon (correction estimée). Jamais sous le plancher distance / VITESSE_MAX_MS, qui sert aussi de repli.
     `lisseur` (rerb/lissage.py, facultatif) : les heures PRIM sont lissées avant l'estimation de position (une révision de PRIM ne fait
     pas sauter le train). Lecture seule : le relevé a été avancé dans le lisseur une fois, à sa réception (charge_utile)."""
     sortie = []

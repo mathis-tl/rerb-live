@@ -1,11 +1,11 @@
 """Décor de toute la ligne : couloir autour du tracé -> requêtes Overpass -> fusion -> cellules chargées selon la vue.
 
-Choix (décision de Mathis : « ce qui nous intéresse se situe aux abords des gares et des voies ») :
+Choix (choix : « ce qui nous intéresse se situe aux abords des gares et des voies ») :
 • couloir de `rayon_m` autour du tracé (échantillonné tous les `pas_m`), via `around` à plusieurs points (polyligne) ;
 • requêtes de `par_requete` points, avec un point de recouvrement entre deux requêtes (pas de trou) ;
 • doublons entre requêtes retirés par (type, id) ; • découpage en cellules de `taille_deg` degrés (~1,5 km), un fichier par cellule.
 Un objet appartient à la cellule de son premier point (un grand bâtiment à cheval sur deux cellules n'est dans qu'une).
-Bibliothèque standard seulement ; aucun réseau ici (le téléchargement est dans exploration/telecharger_decor_ligne.py).
+Bibliothèque standard seulement ; aucun réseau ici (le téléchargement est dans outils/decor/telecharger_decor_ligne.py).
 """
 import math
 

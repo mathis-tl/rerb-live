@@ -1,4 +1,4 @@
-"""Tâche 4, J1 : latitude et longitude d'un train à X mètres de la gare A sur le tronçon A -> B (gares voisines ou non).
+"""Latitude et longitude d'un train à X mètres de la gare A sur le tronçon A -> B (gares voisines ou non).
 
 Synthétique d'abord, puis données réelles du RER B (ignorées si data/ est absent).
 """

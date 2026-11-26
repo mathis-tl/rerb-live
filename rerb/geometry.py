@@ -1,4 +1,4 @@
-"""Tâche 3 (géométrie) : distance le long des rails entre deux gares du RER B.
+"""Distance le long des rails entre deux gares du RER B.
 
 Qui fait quoi :
 • load_morceaux    : lit le tracé IDFM (49 morceaux) -> listes de points (lat, lon).
@@ -8,7 +8,7 @@ Qui fait quoi :
 • choose_distance  : règle « minimum valide » entre candidats.
 • Geometry         : distance(a, b), straight(a, b), neighbor_pairs() sur l'ensemble des morceaux.
 
-Règle de choix (mesures du 12/11/2026, voir docs/mesures-trace-2026-11-12.md) : parmi tous les
+Règle de choix (mesures du 12/11/2026) : parmi tous les
 candidats (un par paire de passages, sur tous les morceaux), on garde le plus petit qui est entre
 `low` x ligne droite et `high` x ligne droite. Seuils 0,99 et 1,35 : provisoires, réglables.
 Bibliothèque standard seulement.
@@ -179,7 +179,7 @@ class Geometry:
 
     def chemin(self, a, b):
         """Polyligne (lat, lon) de a vers b le long des rails, sur le MÊME candidat que `distance`
-        (tâche 4, J1). Lève KeyError (gare inconnue) ou NoValidDistance (aucun candidat plausible)."""
+       . Lève KeyError (gare inconnue) ou NoValidDistance (aucun candidat plausible)."""
         if a == b:
             return [self._stations[a]]
         straight = self.straight(a, b)

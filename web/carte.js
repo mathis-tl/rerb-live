@@ -588,7 +588,7 @@ const orientationVoiture = d => [0, 90 - d.cap + (d.rang >= 2 ? 180 : 0), 0];
 // --- fin voitures
 
 // --- contour
-// Contour d'état en « gélule » posé au sol autour de la rame (maquette validée le 18/11 : outils/pages-dev/tableau-rendu.html) : un tracé par état, épaisseur en PIXELS constante, identique
+// Contour d'état en « gélule » posé au sol autour de la rame (validé le 18/11) : un tracé par état, épaisseur en PIXELS constante, identique
 // de près et de loin ; plusieurs états = tracés emboîtés, le plus important au plus près de la rame. De près, un socle de la couleur de l'état (à quai, en route, terminus, données
 // anciennes) remplit la gélule : il remplace le disque de l'icône de loin. La gélule suit la voie (rame pliée en courbe).
 const PX_TRAIT = 2.4, PX_ECART = 3.5, PX_PULSE = 1.6, DEMI_LARGEUR_CAISSE_M = 1.45;
@@ -909,7 +909,7 @@ function boiteLigne() {
 }
 
 // --- texte
-// Aucun tiret long sur le site (docs/anti-slop-design.md) : les noms et destinations venus de PRIM sont nettoyés avant affichage.
+// Aucun tiret long sur le site : les noms et destinations venus de PRIM sont nettoyés avant affichage.
 function sansTiretLong(s) { return s == null ? "" : String(s).replace(/[\u2013\u2014\u2212]/g, "-"); }
 // --- fin texte
 

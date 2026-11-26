@@ -1,6 +1,5 @@
-"""Tâche 4, J3 : serveur local (cache, plafond d'appels, panne PRIM, /trains). AUCUN réseau : fausse source.
+"""Serveur local (cache, plafond d'appels, panne PRIM, /trains). AUCUN réseau : fausse source.
 
-Plan : docs/plan-tache-4.md (J3, arrêt S3 : 1 appel / 120 s à la demande, plafond 1 000 par jour).
 Données inventées ; les heures sont en UTC.
 """
 import http.server
@@ -122,7 +121,7 @@ class TestCalculerTrains(unittest.TestCase):
         r = releve_de(course("T1", [appel(A, 0, 60), appel(B, 3000, 3060)]), recu=0)
         t = calculer_trains(r, T0 + timedelta(seconds=1000), distance, localiser, nom)[0]
         self.assertTrue(t["perime"])                   # 1000 s > 900 s
-        self.assertIsNotNone(t["lat"])                 # placé quand même (décision de la tâche 3)
+        self.assertIsNotNone(t["lat"])                 # placé quand même
 
     def test_non_place_garde_motif_sans_position(self):
         annule = appel(B, 300, 360)
@@ -427,7 +426,7 @@ class TestLissageDansLeServeur(unittest.TestCase):
 
 
 class TestEtiquettes(unittest.TestCase):
-    """Étape 4 du plan : « périmé » est remplacé par deux faits distincts (décision de Mathis, 18/11)."""
+    """« périmé » est remplacé par deux faits distincts (décision du 18/11)."""
 
     def trains(self, releve, t, lisseur=None):
         if lisseur is not None:
@@ -549,7 +548,7 @@ class TestPlafond(unittest.TestCase):
         self.assertEqual(self.plafond(3).utilises, 0)
 
     def test_ancien_format_du_fichier_est_repris(self):
-        # INVARIANT (magasin.py) : le fichier d'avant T2 `{"jour", "n"}` garde ses appels du jour, sinon le quota serait sous-estimé
+        # INVARIANT (magasin.py) : le fichier d'avant l'introduction du magasin `{"jour", "n"}` garde ses appels du jour, sinon le quota serait sous-estimé
         self.fichier.write_text(json.dumps({"jour": "2026-11-16", "n": 7}))
         self.assertEqual(self.plafond(1300).utilises, 7)
         self.instant = datetime(2026, 11, 17, 10, 0, tzinfo=timezone.utc)
@@ -630,7 +629,7 @@ class TestAppelerPrim(unittest.TestCase):
 
 
 class TestQuotaPrim(unittest.TestCase):
-    """En-têtes de quota PRIM (ticket T6a) : liste blanche stricte, valeurs tronquées, aucune clé."""
+    """En-têtes de quota PRIM : liste blanche stricte, valeurs tronquées, aucune clé."""
     CLE = "CLE-DE-TEST-QUOTA-7d1e"
 
     def serveur(self, comportement):
@@ -794,7 +793,7 @@ def releveur_de_test(fausse, maximum=PLAFOND_JOUR, intervalle=INTERVALLE_S, fene
 
 
 class TestNuitIntervallePlafond(unittest.TestCase):
-    """T2 : coupure 01:00-05:00 (Paris), intervalle 60 s, plafond 1 300 par jour (date de Paris)."""
+    """Coupure 01:00-05:00 (Paris), intervalle 60 s, plafond 1 300 par jour (date de Paris)."""
 
     def test_constantes_de_production(self):
         self.assertEqual((INTERVALLE_S, PLAFOND_JOUR, NUIT_DEBUT_H, NUIT_FIN_H, DELAI_PRIM_S, VERROU_S), (60, 1300, 1, 5, 20, 35))
@@ -892,7 +891,7 @@ class TestNuitIntervallePlafond(unittest.TestCase):
 
 
 class TestMagasinDansLeReleveur(unittest.TestCase):
-    """T2 : l'état partagé (verrou, blocage, compteur) passe par le magasin ; une panne = aucun appel."""
+    """L'état partagé (verrou, blocage, compteur) passe par le magasin ; une panne = aucun appel."""
 
     def test_panne_du_magasin_aucun_appel_releve_garde(self):
         f = Fausse([livraison(course("T1", [appel(A, 0, 60), appel(B, 300, 360)]))] * 2)
@@ -948,13 +947,13 @@ class TestLireCle(unittest.TestCase):
     def test_lit_la_cle(self):
         with tempfile.TemporaryDirectory() as d:
             env = Path(d) / ".env"
-            env.write_text("MBTA_API_KEY=autre\nPRIM_API_KEY=secret123\n")
+            env.write_text("AUTRE_CLE=autre\nPRIM_API_KEY=secret123\n")
             self.assertEqual(lire_cle(env), "secret123")
 
     def test_cle_absente_message_sans_la_valeur(self):
         with tempfile.TemporaryDirectory() as d:
             env = Path(d) / ".env"
-            env.write_text("MBTA_API_KEY=valeur_a_ne_pas_afficher\n")
+            env.write_text("AUTRE_CLE=valeur_a_ne_pas_afficher\n")
             with self.assertRaises(ValueError) as cm:
                 lire_cle(env)
             self.assertNotIn("valeur_a_ne_pas_afficher", str(cm.exception))
@@ -1256,7 +1255,7 @@ class TestContexteReel(unittest.TestCase):
 
 
 class TestContinuiteAuxGares(unittest.TestCase):
-    """Aucune téléportation aux gares (retour de Mathis, Châtelet) : la fin d'un tronçon = le quai de la gare = le début du suivant."""
+    """Aucune téléportation aux gares (retour d'usage, Châtelet) : la fin d'un tronçon = le quai de la gare = le début du suivant."""
 
     def setUp(self):
         self.distance, self.localiser, self.nom = construire_contexte()

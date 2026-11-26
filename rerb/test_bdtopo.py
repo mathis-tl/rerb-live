@@ -1,4 +1,4 @@
-"""T2 étape 2 : appariement bâtiments OSM / BD TOPO par recouvrement surfacique et priorité des hauteurs.
+"""appariement bâtiments OSM / BD TOPO par recouvrement surfacique et priorité des hauteurs.
 Données inventées, aucun fichier IGN, aucun réseau."""
 import struct
 import unittest

@@ -1,4 +1,4 @@
-"""Magasin Upstash (T5) : formes des commandes, verrou, compteur, erreurs, et contrat commun aux trois magasins.
+"""Magasin Upstash : formes des commandes, verrou, compteur, erreurs, et contrat commun aux trois magasins.
 
 Aucun réseau : FauxUpstash répond à la place d'Upstash, l'horloge est simulée.
 """
@@ -67,7 +67,7 @@ class TestFormesDeCommandes(unittest.TestCase):
 
     def test_compteur_par_incr_puis_expiration_48_h_a_la_creation(self):
         """INCR (1 commande facturée) ; EXPIRE seulement quand le compteur vient d'être créé. Pas de script : facturé par
-        commande interne, un EVAL coûterait plus cher que ces deux commandes (voir docs/specs/spec-deploiement-prod.md §6)."""
+        commande interne, un EVAL coûterait plus cher que ces deux commandes."""
         self.assertEqual(self.m.incrementer_compteur("plafond:2026-11-24"), 1)
         self.assertEqual(self.faux.commandes[-2:], [["INCR", "rerb:plafond:2026-11-24"], ["EXPIRE", "rerb:plafond:2026-11-24", 172800]])
         self.assertEqual(self.m.incrementer_compteur("plafond:2026-11-24"), 2)

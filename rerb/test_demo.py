@@ -1,4 +1,4 @@
-"""Tâche 4, J4 : source de DÉMONSTRATION (trains inventés qui roulent sur le vrai tracé). Aucun réseau, aucune clé.
+"""Source de DÉMONSTRATION (trains inventés qui roulent sur le vrai tracé). Aucun réseau, aucune clé.
 
 Sert à voir la carte sans appeler PRIM. Les données sont fausses par construction : le serveur l'annonce (`demo`).
 """

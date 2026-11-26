@@ -1,4 +1,4 @@
-"""Faux serveur REST Upstash pour les tests (T5). Aucun réseau, horloge simulée, aucun test ici.
+"""Faux serveur REST Upstash pour les tests. Aucun réseau, horloge simulée, aucun test ici.
 
 Interprète les commandes que MagasinUpstash envoie : GET, MGET, SET (NX, PX, EX), MSET, INCR, EXPIRE et le script EVAL connu
 (libération du verrou). Le script est REPRODUIT EN PYTHON (pas d'exécution Lua) : ce qu'il fait est vérifié ici, pas le texte Lua.

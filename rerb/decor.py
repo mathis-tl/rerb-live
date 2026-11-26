@@ -1,7 +1,7 @@
-"""Tâche 4, décor 3D : extrait OpenStreetMap (Overpass `out geom`) -> fichier compact pour la carte (deck.gl).
+"""Extrait OpenStreetMap (Overpass `out geom`) -> fichier compact pour la carte (deck.gl).
 
 Données © contributeurs OpenStreetMap, licence ODbL : attribution affichée dans la carte. Le fichier produit n'est pas versionné
-(`web/data/` est ignoré) ; il se régénère avec `rerb/exploration/fabriquer_decor.py`.
+(`web/data/` est ignoré) ; il se régénère avec `outils/decor/fabriquer_decor.py`.
 Choix simples, annoncés : relations = contours extérieurs seulement (pas de cours intérieures) ; bâtiment : champ h_src (osm, etages, defaut ; « ign » est posé après coup par bdtopo.enrichir),
 sans hauteur : HAUTEUR_DEFAUT_M, et le nombre de bâtiments concernés est compté ; coordonnées arrondies à 5 décimales (~1 m).
 Bibliothèque standard seulement.

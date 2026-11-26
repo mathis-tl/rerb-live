@@ -1,6 +1,6 @@
-"""Tests de la tâche 3 : estimer la position d'un train à l'instant t (niveau 1).
+"""Estimer la position d'un train à l'instant t (niveau 1).
 
-Cadrage : docs/cadrage-tache-3.md. Numéros de tests = tableau validé par Mathis (13/11/2026).
+Numéros de tests = tableau validé le 13/11/2026.
 Décor commun : gares A, B, C ; A→B = 2 400 m, B→C = 3 000 m (inventés).
 
     gare   arrivée    départ
@@ -112,7 +112,7 @@ class TestBase(unittest.TestCase):
         self.assertIsNone(e.distance_m)
 
     def test_7_bis_reste_a_quai_au_terminus_60_s(self):
-        # sinon le train disparaît de la carte à l'instant où il arrive (retour de Mathis, 17/11)
+        # sinon le train disparaît de la carte à l'instant où il arrive (retour d'usage, 17/11)
         for h in ("08:07:00", "08:07:30", "08:08:00"):
             e = ou(base(), h)
             self.assertEqual((e.etat, e.gare), (Etat.A_QUAI, "C"), h)
@@ -139,7 +139,7 @@ def train_ligne(gare, arrivee, depart):
 
 
 class TestSejourQuai(unittest.TestCase):
-    """Décisions de Mathis (18/11) : séjour à quai 25 s (30 s en gare dense) ; PRIM annonce 63 à 77 s, mesuré 17 à 32 s."""
+    """Décisions du 18/11 : séjour à quai 25 s (30 s en gare dense) ; PRIM annonce 63 à 77 s, mesuré 17 à 32 s."""
 
     def etat(self, train, t):
         return estimer(train, h(t), dist3000)

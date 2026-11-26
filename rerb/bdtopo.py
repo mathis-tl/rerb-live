@@ -1,4 +1,4 @@
-"""T2 étape 2 : hauteurs des bâtiments par croisement avec la BD TOPO v3 de l'IGN (couche `batiment`).
+"""hauteurs des bâtiments par croisement avec la BD TOPO v3 de l'IGN (couche `batiment`).
 
 Données IGN : Licence Ouverte 2.0 (source et date à citer). Aucune donnée IGN n'est dans le dépôt.
 • lambert93 : WGS84 (lon, lat) -> Lambert 93 (EPSG:2154, mètres). RGF93 et WGS84 diffèrent de ~1 m : négligé (annoncé).

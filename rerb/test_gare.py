@@ -1,4 +1,4 @@
-"""Tâche 4, J4 : panneau « prochains trains à une gare » (stop-monitoring). AUCUN réseau : réponses inventées.
+"""Panneau « prochains trains à une gare » (stop-monitoring). AUCUN réseau : réponses inventées.
 
 Format de la réponse : celui observé dans les relevés de la collecte 2 (MonitoredStopVisit, VehicleAtStop,
 ExpectedDepartureTime, DepartureStatus "cancelled"...). Le cache est de 60 s PAR GARE, avec un plafond d'appels commun.

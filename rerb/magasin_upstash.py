@@ -1,4 +1,4 @@
-"""Magasin Upstash (T5) : la même interface que MagasinLocal, derrière l'API REST d'Upstash.
+"""Magasin Upstash : la même interface que MagasinLocal, derrière l'API REST d'Upstash.
 
 Bibliothèque standard seulement (urllib). Chaque commande est un POST JSON `["CMD", argument, ...]` sur l'URL REST, avec
 `Authorization: Bearer <jeton>`. Réponse `{"result": ...}`. Toute autre issue (HTTP non 200, réponse illisible, délai,

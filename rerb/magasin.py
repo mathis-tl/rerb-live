@@ -1,7 +1,7 @@
 """Magasin : l'état partagé du serveur (verrou du relevé PRIM, compteurs d'appels, blocage, dernière tentative) derrière une seule interface.
 
 Bibliothèque standard seulement. Trois implémentations :
-• MagasinLocal : mémoire, compteurs aussi dans un fichier (un seul Mac, comportement d'avant T2).
+• MagasinLocal : mémoire, compteurs aussi dans un fichier (un seul Mac, comportement d'avant l'introduction du magasin).
 • MagasinFaux  : même interface pour les tests, horloge injectée, pannes simulables.
 • MagasinUpstash (magasin_upstash.py) : Upstash REST, déployé sur Vercel.
 Une panne se signale par ErreurMagasin, jamais par une valeur par défaut.
@@ -88,7 +88,7 @@ class MagasinLocal(Magasin):
     """Verrous et valeurs en mémoire ; compteurs en mémoire ET dans `fichier` (None : pas de fichier, pour la démo).
 
     # INVARIANT : seuls les compteurs sont écrits sur disque. Verrou et blocage (lire/ecrire) restent en mémoire : un blocage 401/403/429
-    # ne survit pas à un redémarrage, comme avant T2 (sinon une clé refusée bloquerait le serveur sans fin).
+    # ne survit pas à un redémarrage, comme avant l'introduction du magasin (sinon une clé refusée bloquerait le serveur sans fin).
     # INVARIANT : l'ancien fichier (`{"jour": ..., "n": ...}`, un seul jour) est lu comme le compteur `plafond:<jour>`. Sans cela, un
     # redémarrage après mise à jour remettrait à zéro les appels du jour et sous-estimerait le quota.
     """
@@ -120,7 +120,7 @@ class MagasinLocal(Magasin):
         try:
             self._fichier.write_text(json.dumps({"compteurs": self._compteurs}), encoding="utf-8")
         except OSError:
-            pass   # le compteur en mémoire reste valable pour ce démarrage (comportement d'avant T2)
+            pass   # le compteur en mémoire reste valable pour ce démarrage (comportement d'avant l'introduction du magasin)
 
     def prendre_verrou(self, nom, duree_s):
         with self._verrou:

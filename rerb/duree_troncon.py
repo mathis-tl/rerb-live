@@ -1,4 +1,4 @@
-"""Tâche 4, T1 : durée minimale plausible par tronçon (gares voisines du RER B). Fonctions pures, stdlib seulement.
+"""durée minimale plausible par tronçon (gares voisines du RER B). Fonctions pures, stdlib seulement.
 
 PRIM annonce parfois des trajets impossibles (Massy-Palaiseau -> Palaiseau, 1 435 m, en 30 s ou 60 s). Une limite unique de
 33 m/s ne les voit pas tous (1 435 m en 60 s = 24 m/s). On mesure donc, tronçon par tronçon, la durée réellement observée
@@ -178,7 +178,7 @@ def table_duree_min(observations, distances, vitesse_ms=PLANCHER_VITESSE_MS, cen
 
 
 def fournisseur_duree_min(chemin):
-    """Lit la table écrite par exploration/mesurer_duree_troncon.py -> f(ref_gare_a, ref_gare_b) = (secondes, source) ou None.
+    """Lit la table des durées minimales mesurées (rerb/donnees/duree_min_troncon.json) -> f(ref_gare_a, ref_gare_b) = (secondes, source) ou None.
     Références PRIM « STIF:StopArea:SP:<n>: ». None = tronçon inconnu (ou fichier absent, illisible) : l'appelant se replie sur
     le plancher distance / 33 m/s."""
     try:

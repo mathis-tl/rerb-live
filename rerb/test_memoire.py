@@ -229,7 +229,7 @@ class TestPurgeEtTaille(unittest.TestCase):
         self.assertEqual(d["vus"], {"k": h("08:00:30").isoformat()})
         del d["vus"]
         autre = Memoire()
-        autre.importer(d)                 # un export antérieur à T5 se lit sans erreur
+        autre.importer(d)                 # un export plus ancien se lit sans erreur
         self.assertEqual(sorted(autre.exporter()["trains"]), ["k"])
 
     def test_taille_export_mesure_le_json_compact(self):

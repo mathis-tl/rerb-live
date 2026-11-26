@@ -1,4 +1,4 @@
-"""Tâche 4, J4 : source de DÉMONSTRATION. Trains INVENTÉS qui roulent sur la vraie suite de gares, au format PRIM.
+"""Source de DÉMONSTRATION. Trains INVENTÉS qui roulent sur la vraie suite de gares, au format PRIM.
 
 Sert à voir la carte sans appeler PRIM ni utiliser de clé (`serveur.py --demo`). Ces trains n'existent pas : le
 serveur l'affiche dans la page. Fonction pure et déterministe : mêmes (instant, chaîne) -> même réponse. Les trains

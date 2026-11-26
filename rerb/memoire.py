@@ -1,6 +1,6 @@
 """Mémoire M2 (décision P3, 13/11/2026) : garder la dernière heure connue des gares que PRIM retire.
 
-Problème mesuré (docs/cadrage-tache-3.md §11) : PRIM retire de la liste d'un train les gares déjà
+Problème mesuré : PRIM retire de la liste d'un train les gares déjà
 quittées ; sans mémoire, `estimer` répond « position inconnue » pendant 31 % du temps de roulage.
 
 Règles :
@@ -11,7 +11,7 @@ Règles :
   gare suivante ; l'arrivée ne peut pas dépasser le départ réparé. Heure ramenée en arrière -> `repare`.
 • Mémoire par train (clé fournie par l'appelant, par ex. DatedVehicleJourneyRef). Un relevé sans passage
   n'efface pas la mémoire.
-• Purge (T5) : une course absente du relevé depuis plus de PURGE_S (4 h) est oubliée ; une course sans
+• Purge : une course absente du relevé depuis plus de PURGE_S (4 h) est oubliée ; une course sans
   horodatage n'a jamais été « vue » et n'est pas gardée. L'export ne dépasse pas TAILLE_MAX_OCTETS.
 """
 import json
@@ -65,7 +65,7 @@ class Memoire:
                 "vus": {cle: v.isoformat() for cle, v in self._vus.items()}}
 
     def importer(self, d):
-        """Remplace la mémoire par celle d'un `exporter()`. Sans « vus » (export antérieur à T5) : accepté."""
+        """Remplace la mémoire par celle d'un `exporter()`. Sans « vus » (export plus ancien) : accepté."""
         if d.get("v") != VERSION_FORMAT:
             raise ValueError(f"format de mémoire inconnu : {d.get('v')!r}")
         self._precedent = {cle: [passage_depuis_json(p) for p in passages] for cle, passages in d["trains"].items()}

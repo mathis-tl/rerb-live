@@ -1,6 +1,6 @@
-"""Tâche 4, J1 : latitude et longitude d'un train à X mètres de la gare A sur le tronçon A -> B.
+"""Latitude et longitude d'un train à X mètres de la gare A sur le tronçon A -> B.
 
-Plan : docs/plan-tache-4.md (J1, décision Q2 option 1).
+
 • chemin_troncon    : polyligne (lat, lon) de A à B. Gares voisines : `Geometry.chemin` (même candidat que la
                       distance utilisée par `estimer`). Gares non voisines (train semi-direct) : tronçons voisins
                       enchaînés le long du chemin unique de l'arbre (`Reseau.chemin`), sans point en double.

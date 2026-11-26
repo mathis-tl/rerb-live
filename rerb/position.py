@@ -1,6 +1,6 @@
-"""Tâche 3 : estimer la position d'un train à l'instant t (niveau 1, vitesse constante).
+"""Estimer la position d'un train à l'instant t (niveau 1, vitesse constante).
 
-Cadrage : docs/cadrage-tache-3.md. Fonction pure : `t` est un paramètre, jamais l'heure du Mac.
+Fonction pure : `t` est un paramètre, jamais l'heure du Mac.
 
 Qui fait quoi :
 • lire_train       : un EstimatedVehicleJourney PRIM -> Train (heure estimée sinon théorique).
@@ -8,7 +8,7 @@ Qui fait quoi :
 • Reseau           : distance entre gares NON voisines = somme des couples voisins (chemin unique d'un arbre).
 • distance_depuis_reseau : adapte un Reseau (numéros de gares) aux identifiants PRIM.
 
-Décisions de Mathis (13/11/2026) : origine sans arrivée -> arrivée = départ ; terminus sans départ ->
+Décisions du 13/11/2026 : origine sans arrivée -> arrivée = départ ; terminus sans départ ->
 départ = arrivée ; heures incohérentes ou train annulé -> « non placé » avec motif ; données plus
 vieilles que 15 min -> drapeau « périmé » (train placé quand même) ; gare précédente retirée ->
 « position inconnue ».
@@ -21,21 +21,21 @@ from enum import Enum
 from stops import StopNotFound, stop_area_number
 
 SEUIL_PERIME = timedelta(minutes=15)
-# Décision du 13/11 : terminus sans départ -> départ = arrivée. Amendée le 17/11 (retour de Mathis : le train disparaissait à l'instant
-# d'arriver) : le départ est posé 60 s après l'arrivée. Valeur par défaut, à ajuster par Mathis.
+# Décision du 13/11 : terminus sans départ -> départ = arrivée. Amendée le 17/11 (retour d'usage : le train disparaissait à l'instant
+# d'arriver) : le départ est posé 60 s après l'arrivée. Valeur par défaut, à ajuster.
 SEJOUR_TERMINUS = timedelta(seconds=60)
-# Décision du 18/11 (relevé de Mathis à Palaiseau : arrêt réel 17 à 32 s, PRIM annonce 63 à 77 s) : à une gare intermédiaire le départ est
+# Décision du 18/11 (relevé à Palaiseau : arrêt réel 17 à 32 s, PRIM annonce 63 à 77 s) : à une gare intermédiaire le départ est
 # recalculé = arrivée PRIM + séjour. L'arrivée PRIM reste la référence ; la vitesse de roulage s'ajuste d'elle-même (interpolation
-# départ -> arrivée suivante). Voir docs/recap-releve-palaiseau-18-11.md et docs/plan-sejour-quai.md.
+# départ -> arrivée suivante).
 SEJOUR_QUAI = timedelta(seconds=25)
 SEJOUR_GARE_DENSE = timedelta(seconds=30)
 # Numéros de gare (StopArea) à fort trafic : Châtelet - Les Halles, Gare du Nord, Saint-Michel Notre-Dame, Luxembourg, Massy - Palaiseau,
 # Aéroport CDG 1, Aéroport Charles de Gaulle 2.
 GARES_DENSES = frozenset({"45102", "462394", "44877", "43833", "58774", "462398", "473364"})
-# Au-delà, PRIM annonce une vraie retenue (régulation, incident) : on ne raccourcit pas. 120 s décidé par Mathis le 18/11 : les arrêts annoncés
+# Au-delà, PRIM annonce une vraie retenue (régulation, incident) : on ne raccourcit pas. 120 s décidé le 18/11 : les arrêts annoncés
 # du relevé du matin (849 arrêts, toute la ligne) vont jusqu'à 97 s, aucun au-dessus de 180 s ; à revoir avec des données d'un jour perturbé.
 ARRET_ANNONCE_MAX = timedelta(seconds=120)
-# Train « retenu » (décision du 21/11, idée de Mathis) : PRIM repousse l'arrivée de plus de RETENUE_MIN (voir lissage.py) alors que le train roule ;
+# Train « retenu » (décision du 21/11) : PRIM repousse l'arrivée de plus de RETENUE_MIN (voir lissage.py) alors que le train roule ;
 # il continue à sa vitesse jusqu'à ATTENTE_RETENUE_M avant la gare (ou là où il est déjà), y attend en pleine voie, puis repart pour arriver à l'heure PRIM.
 ATTENTE_RETENUE_M = 150.0
 FRACTION_ATTENTE_MAX = 0.98

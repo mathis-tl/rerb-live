@@ -1,4 +1,4 @@
-"""T2 : le magasin (rerb/magasin.py). Aucun réseau, horloge simulée."""
+"""Le magasin (rerb/magasin.py). Aucun réseau, horloge simulée."""
 import tempfile
 import unittest
 from pathlib import Path

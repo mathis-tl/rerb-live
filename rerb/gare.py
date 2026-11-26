@@ -1,6 +1,6 @@
-"""Tâche 4, J4 : prochains trains à une gare, depuis `stop-monitoring` (une gare par appel).
+"""Prochains trains à une gare, depuis `stop-monitoring` (une gare par appel).
 
-Décision de Mathis (plan tâche 4 §0.4) : le « prochain train » d'une gare vient de `stop-monitoring` direct (quota PRIM
+Choix de conception : le « prochain train » d'une gare vient de `stop-monitoring` direct (quota PRIM
 1 000 000 par jour), pas de la carte. Cache de 60 s PAR GARE (la source ne change que toutes les ~30 s, sonde du 15/11).
 • lire_passages  : réponse PRIM -> liste de passages du RER B (heure estimée, retard, à quai, annulé), triés, limités.
 • ReleveurGares  : cache par gare, plafond d'appels commun, un seul appel à la fois par gare, erreur = dernier relevé gardé,
@@ -65,7 +65,7 @@ def lire_passages(reponse, maintenant, limite=8):
 
 class ReleveurGares:
     """`fetch(gare)` -> réponse `stop-monitoring` décodée, ou lève ErreurPrim (serveur.py). `plafond` : voir Plafond ; None : pas de
-    plafond propre (Vercel : `/gare` est limité par la liste blanche des gares et le cache du CDN, voir docs/specs/spec-deploiement-prod.md)."""
+    plafond propre (Vercel : `/gare` est limité par la liste blanche des gares et le cache du CDN)."""
 
     def __init__(self, fetch, plafond, intervalle_s=60, limite=8):
         self._fetch, self._plafond = fetch, plafond
@@ -76,7 +76,7 @@ class ReleveurGares:
         self._tentative = {}                     # gare -> instant du dernier appel (réussi ou non)
         self._erreur = {}                        # gare -> message de la dernière erreur
         self.bloque = False
-        self._bloque_jusqu = None                # fin du blocage 401/403/429 : 15 min pour 429, 6 h pour 401/403 (decision T5 a)
+        self._bloque_jusqu = None                # fin du blocage 401/403/429 : 15 min pour 429, 6 h pour 401/403
 
     @property
     def plafond(self):

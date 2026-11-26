@@ -1,4 +1,4 @@
-"""Tâche 4, T1 : durée minimale plausible par tronçon (gares voisines). Fonctions pures, données inventées.
+"""durée minimale plausible par tronçon (gares voisines). Fonctions pures, données inventées.
 
 Observé : départ de A (VehicleAtStop vrai puis faux), arrivée à B (listé sans être à quai, puis à quai) ;
 chaque événement est un intervalle [bas, haut] entre deux relevés, on prend le milieu.

@@ -1,4 +1,4 @@
-"""Lissage des changements d'heure d'arrivée annoncés par PRIM (étape 3 de docs/plan-sejour-quai.md, décisions de Mathis du 18/11).
+"""Lissage des changements d'heure d'arrivée annoncés par PRIM (décisions du 18/11).
 
 Problème : PRIM revoit souvent l'heure d'arrivée d'un train (49 changements en une heure à Palaiseau, 45 de plus de 30 s). Appliquée telle
 quelle, une révision fait sauter le train sur la carte ou change sa vitesse brutalement.
@@ -13,7 +13,7 @@ Règle : pour chaque (course, gare), on garde en mémoire l'arrivée « adoptée
   porte retenu_depuis (ancienne arrivée adoptée) et retenu_le (instant de la révision), et position.estimer arrête le train en pleine voie avant la gare.
 • Garde-fou : le lissage ne doit jamais rendre un train « non placé » (arrivée avant le départ précédent) ; on repousse alors l'heure.
 
-Deux temps (T3, 24/11/2026), pour que plusieurs copies du serveur donnent le même résultat quelle que soit la cadence des requêtes :
+Deux temps (24/11/2026), pour que plusieurs copies du serveur donnent le même résultat quelle que soit la cadence des requêtes :
 • `avancer(trains, recu)` : appelé UNE fois par relevé PRIM reçu. C'est la seule écriture. La cible du relevé précédent s'applique jusqu'à `recu`,
   la nouvelle cible à partir de `recu`.
 • `appliquer(ref, train, maintenant)` : lecture seule. L'arrivée adoptée à `maintenant` se calcule en forme fermée à partir de l'état du dernier
@@ -28,8 +28,8 @@ from datetime import datetime, timedelta
 
 from position import depart_effectif
 
-TOLERANCE_S = 15.0   # écart entre l'arrivée adoptée et l'heure PRIM en dessous duquel on ne change rien (Mathis, 18/11 : 30 s, puis 15 s après le rejeu : erreur de départ 54 s au lieu de 59 s)
-BIAIS_ARRIVEE_S = 10.0   # le train arrive en moyenne plus tard que l'heure estimée par PRIM (relevé de Palaiseau, 18/11 : 26 s, 12 trains) : on ajoute 10 s à chaque arrivée PRIM, valeur de départ décidée par Mathis, à réviser avec un 2e relevé
+TOLERANCE_S = 15.0   # écart entre l'arrivée adoptée et l'heure PRIM en dessous duquel on ne change rien (18/11 : 30 s, puis 15 s après le rejeu : erreur de départ 54 s au lieu de 59 s)
+BIAIS_ARRIVEE_S = 10.0   # le train arrive en moyenne plus tard que l'heure estimée par PRIM (relevé de Palaiseau, 18/11 : 26 s, 12 trains) : on ajoute 10 s à chaque arrivée PRIM, valeur de départ, à réviser avec un 2e relevé
 RETENUE_S = 120.0    # révision PRIM vers plus tard de plus de 120 s (pendant que le train roule) : le train est retenu en pleine voie au lieu de ralentir (= ARRET_ANNONCE_MAX)
 RAMPE_MAX = 0.2      # secondes d'arrivée rattrapées par seconde écoulée : la vitesse du train varie de 20 % au plus
 VERSION_FORMAT = 1   # format de exporter() / importer()
@@ -188,7 +188,7 @@ class Lisseur:
             c = self._courses.get(ref)
             return (c["derniere"] - c["premiere"]).total_seconds() if c else 0.0
 
-    # --- sauvegarde (T5 : Upstash) ---
+    # --- sauvegarde (Upstash) ---
 
     def exporter(self):
         """État en JSON pur (instants en ISO 8601, clés (course, gare) en chaînes, format versionné)."""

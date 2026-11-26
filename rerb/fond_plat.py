@@ -1,6 +1,6 @@
 """Fond plat de toute la ligne : ce qu'on voit au sol quand on dézoome (zones, parcs, eaux, grandes routes), sans bâtiments.
 
-Choix (21/11, décision de Mathis : « plus de vide, comme Apple Plans, au moins tout ce qui concerne le projet ») :
+Choix (21/11 : « plus de vide, comme Apple Plans, au moins tout ce qui concerne le projet ») :
 • cellules de `taille_deg` (0,05° ~ 3,7 x 5,5 km) dans un couloir élargi (marge de quelques km) autour du tracé ;
 • une requête Overpass par cellule (boîte), seulement le fond : pas de bâtiments, pas de petites rues (ils restent près des rails, voir decor_ligne.py) ;
 • coordonnées arrondies à 5 décimales (~1 m) et points alignés retirés ; un objet n'est gardé que dans la cellule de son premier point.

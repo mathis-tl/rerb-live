@@ -1,10 +1,10 @@
-"""Étape 3 du plan docs/plan-sejour-quai.md : écart de moins de 30 s toléré, sans saut de position.
+"""Lissage : écart de moins de 30 s toléré, sans saut de position.
 
 Quand PRIM déplace l'heure d'arrivée d'une gare, le train ne saute pas : l'arrivée « adoptée » reste telle quelle si l'écart avec la nouvelle
 heure PRIM est d'au plus 30 s, sinon elle s'en rapproche (zone de ±30 s autour de la nouvelle heure) à 0,2 s par seconde au plus.
 Décor : origine X (départ 0 s), gare B (arrivée 300 s), terminus Z (arrivée 700 s), 1 000 m par tronçon.
 
-T3 (24/11/2026) : `avancer` est appelé à chaque relevé PRIM (une fois), `appliquer` à chaque instant voulu (lecture seule). Quand une
+`avancer` est appelé à chaque relevé PRIM (une fois), `appliquer` à chaque instant voulu (lecture seule). Quand une
 valeur attendue change par rapport à l'ancien lissage (qui avançait à chaque requête), la différence est signalée dans le test : la rampe
 démarre au relevé, et non à la requête précédente (écart de quelques secondes, nul à la cadence de 3 s).
 """
@@ -266,7 +266,7 @@ class TestLisseur(unittest.TestCase):
 
 
 class TestReglagesLivres(unittest.TestCase):
-    """Décisions de Mathis (18/11) : tolérance 15 s ; le train arrive en moyenne plus tard que l'estimé (PRIM : biais −26 s à Palaiseau), +10 s pour commencer."""
+    """Décisions du 18/11 : tolérance 15 s ; le train arrive en moyenne plus tard que l'estimé (PRIM : biais −26 s à Palaiseau), +10 s pour commencer."""
 
     def test_valeurs_par_defaut(self):
         self.assertEqual((TOLERANCE_S, BIAIS_ARRIVEE_S), (15.0, 10.0))
@@ -335,7 +335,7 @@ class TestReglagesLivres(unittest.TestCase):
 
 
 class TestRetenue(unittest.TestCase):
-    """Décision du 21/11 (idée de Mathis, « pleine voie ») : PRIM repousse l'arrivée de plus de 120 s alors que le train roule -> le train
+    """Décision du 21/11 (« pleine voie ») : PRIM repousse l'arrivée de plus de 120 s alors que le train roule -> le train
     continue à sa vitesse jusqu'à ~150 m de la gare, y attend, puis repart pour arriver à la nouvelle heure PRIM. Voir position.estimer."""
 
     def servi(self, ls, arr_b, maintenant):
@@ -424,7 +424,7 @@ class TestRetenue(unittest.TestCase):
 
 
 class TestRejeuRelevesEtRequetes(unittest.TestCase):
-    """T3 : le résultat ne dépend ni de la cadence, ni de l'ordre, ni du nombre des requêtes (seulement des relevés)."""
+    """le résultat ne dépend ni de la cadence, ni de l'ordre, ni du nombre des requêtes (seulement des relevés)."""
 
     @staticmethod
     def relevés():
@@ -471,7 +471,7 @@ class TestRejeuRelevesEtRequetes(unittest.TestCase):
 
 
 class TestSauvegardeLissage(unittest.TestCase):
-    """T3 : exporter / importer (JSON pur, versionné) redonnent un lisseur au comportement identique."""
+    """exporter / importer (JSON pur, versionné) redonnent un lisseur au comportement identique."""
 
     def etat_riche(self):
         l = lisseur(tolerance_s=15.0)

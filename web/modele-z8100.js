@@ -1,6 +1,6 @@
-// Modèle 3D de la rame Z 8100 (MI79), validé par Mathis le 17/11/2026 et utilisé par web/carte.js.
+// Modèle 3D de la rame Z 8100 (MI79), validé le 17/11/2026 et utilisé par web/carte.js.
 //
-// Sources (fiche http://fbrisou.free.fr/RAIL21/FicheZ8100.pdf, page 4 et plans pages 4-9, + photo de Mathis, MI79 rénovée) :
+// Sources (fiche http://fbrisou.free.fr/RAIL21/FicheZ8100.pdf, page 4 et plans pages 4-9, + photo, MI79 rénovée) :
 //   COTÉ sur la fiche : longueur de la rame 104,050 m ; motrice 26,025 m ; remorque 26,000 m ; largeur 2,798 m ; hauteur 4,170 m ;
 //   entraxe des pivots de bogie 18,500 m ; empattement d'un bogie 2,400 m ; composition motrice + 2 remorques + motrice (4 caisses).
 //   COTÉ mais rattaché au dessin par supposition : 1,190 m = hauteur du seuil de porte (flèche verticale sous la caisse, page 4).

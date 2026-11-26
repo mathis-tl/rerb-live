@@ -1,4 +1,4 @@
-"""Tâche 4, décor 3D : conversion d'un extrait OpenStreetMap (Overpass `out geom`) en fichier compact pour la carte.
+"""Conversion d'un extrait OpenStreetMap (Overpass `out geom`) en fichier compact pour la carte.
 Données inventées, aucun réseau."""
 import unittest
 
