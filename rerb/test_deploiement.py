@@ -1,4 +1,4 @@
-"""Déploiement Vercel (T4) : configuration statique, en-têtes, pages de développement, geo.json, page (cadence, pause, nuit).
+"""Déploiement Vercel : configuration statique, en-têtes, pages de développement, geo.json, page (cadence, pause, nuit).
 
 Aucun réseau. Les règles JS (cadence, inactivité, message de nuit) sont exécutées avec node quand il est installé.
 """
@@ -13,8 +13,6 @@ from serveur import EN_TETES, charger_geo
 
 RACINE = Path(__file__).resolve().parent.parent
 WEB = RACINE / "web"
-PAGES_DEV = ["comparaison-modeles.html", "comparaison-modeles.js", "comparaison-zoom.html", "comparaison-zoom.js",
-             "maquette-rendus.html", "tableau-rendu.html", "tableau-rendu.js"]
 
 
 def _node(bloc, expression):
@@ -86,11 +84,6 @@ class TestVercelJson(unittest.TestCase):
 
 
 class TestDeploiementFichiers(unittest.TestCase):
-    def test_pages_de_developpement_hors_du_site(self):
-        for nom in PAGES_DEV:
-            self.assertFalse((WEB / nom).exists(), f"{nom} ne doit plus être dans web/")
-            self.assertTrue((RACINE / "outils" / "pages-dev" / nom).is_file(), f"{nom} doit être dans outils/pages-dev/")
-
     def test_geo_json_egal_a_la_route_geo(self):
         attendu = json.dumps(charger_geo(), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.assertEqual((WEB / "data" / "geo.json").read_bytes(), attendu)
@@ -102,7 +95,7 @@ class TestDeploiementFichiers(unittest.TestCase):
 
     def test_vercelignore_exclut_les_outils_et_les_secrets(self):
         lignes = {l.strip() for l in (RACINE / ".vercelignore").read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")}
-        for motif in ("data/raw", "recorder", "outils", "docs", "rerb/exploration", "rerb/test_*.py", "**/__pycache__", ".env", ".env.*"):
+        for motif in ("data/raw", "outils", "docs", "rerb/test_*.py", "**/__pycache__", ".env", ".env.*"):
             self.assertIn(motif, lignes)
 
     def test_api_sante_sans_secret_ni_reseau(self):

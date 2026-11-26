@@ -5,11 +5,9 @@
 *.env
 # Développement et données brutes
 data/raw
-recorder
 outils
 docs
 .agent-work
 .claude
-rerb/exploration
 rerb/test_*.py
 **/__pycache__

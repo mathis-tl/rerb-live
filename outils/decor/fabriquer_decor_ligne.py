@@ -1,12 +1,12 @@
 """couloir.json (extraction PBF) -> web/data/decor/ : une cellule JSON par case de 0,02° (~1,5 km) + index.json.
-Usage : python3 -I rerb/exploration/fabriquer_decor_ligne.py [couloir.json] [dossier_sortie] [bat_ign.json]   (entrée externe : -I).
+Usage : python3 -I outils/decor/fabriquer_decor_ligne.py [couloir.json] [dossier_sortie] [bat_ign.json]   (entrée externe : -I).
 bat_ign.json (facultatif) = sortie de extraire_bdtopo.py : hauteurs BD TOPO (h_src « ign »), priorité OSM height > IGN > étages > 9 m.
 Sans lui : OSM seul (étape 1)."""
 import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "rerb"))
 from bdtopo import dedoublonner, enrichir  # noqa: E402
 from decor import convertir  # noqa: E402
 from decor_ligne import decouper_cellules  # noqa: E402

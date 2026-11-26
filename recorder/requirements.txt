@@ -1,2 +1,0 @@
-gtfs-realtime-bindings==3.0.0
-paho-mqtt==2.2.0

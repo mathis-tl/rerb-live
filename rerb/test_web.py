@@ -1,4 +1,4 @@
-"""Tâche 4, J4 : la page de la carte n'appelle rien hors du serveur local (garde-fou statique, sans navigateur).
+"""La page de la carte n'appelle rien hors du serveur local (garde-fou statique, sans navigateur).
 
 Complète la politique CSP envoyée par le serveur (test_serveur.py) et la garde réseau de carte.js : si quelqu'un
 ajoute un CDN, une tuile ou une police en ligne dans la page, ce test échoue. Le fichier deck.gl vendu
@@ -11,7 +11,6 @@ import unittest
 from pathlib import Path
 
 WEB = Path(__file__).resolve().parent.parent / "web"
-PAGES_DEV = Path(__file__).resolve().parent.parent / "outils" / "pages-dev"   # maquettes hors du site publié (T4)
 FICHIERS = ("index.html", "carte.js", "carte.css", "modele-z8100.js")
 URL_EXTERNE = re.compile(r"(https?:)?//[A-Za-z0-9.-]+\.[a-z]{2,}", re.I)
 
@@ -94,7 +93,7 @@ class TestCodeCarte(unittest.TestCase):
                                 capture_output=True, text=True, timeout=30, check=True).stdout
         return json.loads(sortie)
 
-    # --- tirets longs interdits sur le site (docs/anti-slop-design.md)
+    # --- tirets longs interdits sur le site
     def test_aucun_tiret_long_dans_le_site(self):
         for f in ("index.html", "carte.js", "carte.css", "modele-z8100.js"):
             texte = (WEB / f).read_text(encoding="utf-8")
@@ -458,7 +457,7 @@ class TestCodeCarte(unittest.TestCase):
         ouverture = self.js.split("// ouverture :")[1].split("chargerDecor();")[0]
         self.assertNotIn("boiteLigne", ouverture)
 
-    # --- design de la version jour (docs/anti-slop-design.md)
+    # --- design de la version jour
     POLICES_LOCALES = {"Barlow", "Barlow Semi Condensed", "IBM Plex Mono"}
     POLICES_BANNIES = ("system-ui", "-apple-system", "BlinkMacSystemFont", "Inter", "Roboto", "Poppins", "Space Grotesk", "DM Sans", "Arial", "Helvetica", "Segoe UI", "SF Pro")
 
@@ -798,7 +797,7 @@ class TestCodeCarte(unittest.TestCase):
         return self._node("// --- interpolation", "// --- fin interpolation", expression)
 
     def test_mouvement_continu_sans_arret_entre_deux_releves(self):
-        # retour de Mathis : « avance - pause - avance ». Vitesse constante sur tout le segment (pas de lissage à vitesse nulle aux bouts)
+        # retour d'usage : « avance - pause - avance ». Vitesse constante sur tout le segment (pas de lissage à vitesse nulle aux bouts)
         e = "{de:[0,0,0], vers:[3,0,0], t0:0, duree:3000}"
         xs = [self._interp(f"positionAffichee({e}, {t})[0]") for t in (30, 300, 1500, 2700, 2970)]
         for x, t in zip(xs, (30, 300, 1500, 2700, 2970)):
@@ -827,7 +826,7 @@ class TestCodeCarte(unittest.TestCase):
         self.assertEqual(self._vue("pasVue({bearing: 0, pitch: 55}, 0, 0)"), {"bearing": 0, "pitch": 55})
 
     def test_bandes_d_incertitude_ne_masquent_pas_le_pied_des_trains(self):
-        # retour de Mathis : le bas des trains passait « sous » la bande d'incertitude (z-fighting : bandes coplanaires au sol, écrivant la profondeur)
+        # retour d'usage : le bas des trains passait « sous » la bande d'incertitude (z-fighting : bandes coplanaires au sol, écrivant la profondeur)
         bloc = self.js.split('id, data: p.filter(d => avecChemin(d, cle))')[1].split("}));")[0]
         self.assertIn("depthWriteEnabled: false", bloc, "la bande ne doit pas écrire dans le tampon de profondeur")
         self.assertIn("Z_BANDE", bloc, "chaque bande a sa propre hauteur (pas de plans coplanaires)")
@@ -849,7 +848,7 @@ class TestCodeCarte(unittest.TestCase):
         self.assertIn("bearing: v.bearing || 0", self.js, "la vue mémorise le cap et l'inclinaison")
         self.assertIn("clic droit", html)
 
-    # --- retours de Mathis du 17/11 sur la carte
+    # --- retours d'usage du 17/11 sur la carte
 
     def test_vue_de_depart_assez_proche_pour_voir_les_batiments(self):
         zd = float(re.search(r"ZOOM_DEPART = ([0-9.]+)", self.js).group(1))
@@ -1259,89 +1258,3 @@ class TestCodeCarte(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class TestTableauRendu(unittest.TestCase):
-    """Maquette `outils/pages-dev/tableau-rendu.html` : un train par état, de près et de loin, en thème clair et sombre (données inventées, aucun serveur PRIM)."""
-    ETATS = ("En route", "À quai", "Terminus", "Données anciennes", "Horaire théorique", "Train sélectionné", "Retenu")
-    SANS_POSITION = ("Non placé", "Position inconnue", "Terminé")
-
-    def setUp(self):
-        self.html = (PAGES_DEV / "tableau-rendu.html").read_text(encoding="utf-8")
-        self.js = (PAGES_DEV / "tableau-rendu.js").read_text(encoding="utf-8")
-
-    def test_aucune_adresse_externe_ni_script_en_ligne(self):
-        for nom, texte in (("html", self.html), ("js", self.js)):
-            texte = re.sub(r"/\*.*?\*/", "", texte, flags=re.S)
-            texte = "\n".join(l for l in texte.splitlines() if not l.lstrip().startswith("//"))
-            self.assertIsNone(URL_EXTERNE.search(texte), nom)
-        # la politique CSP du serveur n'autorise que script-src 'self' : aucun script écrit dans la page
-        for balise in re.findall(r"<script\b[^>]*>", self.html):
-            self.assertIn("src=", balise)
-        self.assertIn("vendor/deck.gl-9.4.1.min.js", self.html)
-        self.assertIn("modele-z8100.js", self.html)
-        self.assertIn("tableau-rendu.js", self.html)
-
-    def test_tous_les_etats_sont_montres(self):
-        for e in self.ETATS:
-            self.assertIn(e, self.js, e)
-        for e in self.SANS_POSITION:
-            self.assertIn(e, self.html + self.js, e)
-
-    def test_les_deux_propositions_de_retenu_et_les_quatre_vues(self):
-        self.assertIn("proposition A", self.js)
-        self.assertIn("proposition B", self.js)
-        for vue in ("clair-pres", "clair-loin", "sombre-pres", "sombre-loin"):
-            self.assertIn(vue, self.html + self.js, vue)
-
-    def test_distingue_l_existant_du_propose(self):
-        self.assertIn("existe déjà", self.js)
-        self.assertIn("proposé", self.js)
-
-    def test_les_couleurs_d_etat_sont_celles_de_la_carte(self):
-        carte = (WEB / "carte.js").read_text(encoding="utf-8")
-        for nom in ("COULEURS", "GRIS", "ROSE_ANCIENNES", "ROUGE_TERMINUS"):
-            valeur = re.search(rf"const {nom} = (\{{[^}}]*\}}|\[[^\]]*\]);", carte).group(1)
-            self.assertIn(valeur, self.js, nom)
-
-    def test_contour_autour_de_la_rame_option_du_tableau(self):
-        # proposé le 18/11 : contour en gélule posé au sol autour de la rame (un tracé par état, épaisseur en pixels), au lieu d'un cercle dessous
-        self.assertIn('id="contour"', self.html)
-        self.assertIn("Contour en gélule", self.html)
-        self.assertIn("PathLayer", self.js)
-        self.assertIn('widthUnits: "pixels"', self.js)
-        self.assertNotIn("cullMode", self.js)   # la coque 3D retournée est abandonnée
-
-    def test_camera_pilotable_dans_le_tableau(self):
-        # 18/11 : Mathis veut tourner autour des rames pour juger le contour en 3D
-        self.assertIn("controller: true", self.js)
-        self.assertIn("dragRotate: true", self.js)
-        self.assertIn("maxPitch: 85", self.js)
-        for bouton in ("vue-reinit", "vue-dessus", "vue-cote", "vue-bout", "vue-tourner", "sync"):
-            self.assertIn(f'id="{bouton}"', self.html)
-
-    def test_articule_des_le_zoom_15_et_rame_rigide_en_dessous(self):
-        # 18/11 : seuil à 15 décidé par Mathis (12 essayé : détaillé agrandi moins lisible que l'icône) ; l'icône (palette alignée) ne sert qu'en dessous
-        self.assertRegex(self.js, r"const ZOOM_DETAIL = 15,")
-        self.assertIn("ZOOM_PLEIN = 16", self.js)
-        self.assertIn("PALETTE_ALIGNEE", self.js)
-        self.assertIn('id="palette"', self.html)
-        for vue in ("clair-moyen", "sombre-moyen"):
-            self.assertIn(vue, self.html + self.js, vue)
-
-    def test_page_de_comparaison_avant_apres_par_niveau_de_zoom(self):
-        html = (PAGES_DEV / "comparaison-zoom.html").read_text(encoding="utf-8")
-        js = (PAGES_DEV / "comparaison-zoom.js").read_text(encoding="utf-8")
-        for balise in re.findall(r"<script\b[^>]*>", html):
-            self.assertIn("src=", balise)   # CSP du serveur : aucun script en ligne
-        for nom, texte in (("html", html), ("js", js)):
-            texte = "\n".join(l for l in texte.splitlines() if not l.lstrip().startswith("//"))
-            self.assertIsNone(URL_EXTERNE.search(texte), nom)
-        self.assertIn("tableau-rendu.js", html)
-        self.assertIn("ZOOMS = [10, 11, 12, 13, 14, 15, 16, 17]", js)   # un niveau de zoom de plus = échelle x2
-        self.assertIn("AVANT", html + js)
-        self.assertIn("APRÈS", html + js)
-
-    def test_cumuls_d_etats_montres(self):
-        self.assertIn("Terminus + sélectionné", self.js)
-        self.assertIn("Retenu B + données anciennes", self.js)

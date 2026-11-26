@@ -1,6 +1,6 @@
 """Télécharge (Overpass, un appel par requête, séquentiel, avec pause) le couloir OSM autour de TOUT le tracé du RER B.
 Brut -> ~/rerb-osm/brut/ligne/requete_NN.json (hors dépôt). Reprend où il s'est arrêté (fichiers existants conservés).
-Usage : python3 rerb/exploration/telecharger_decor_ligne.py [--rayon 350] [--sec-entre 15] [--essai]
+Usage : python3 outils/decor/telecharger_decor_ligne.py [--rayon 350] [--sec-entre 15] [--essai]
 --essai : affiche le nombre de requêtes sans rien télécharger. Aucune donnée personnelle envoyée (zones géographiques seulement)."""
 import argparse
 import json
@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "rerb"))
 from decor_ligne import echantillonner, requetes  # noqa: E402
 from serveur import charger_geo  # noqa: E402
 

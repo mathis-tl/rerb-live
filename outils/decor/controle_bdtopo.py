@@ -1,4 +1,4 @@
-"""Contrôle du croisement OSM / BD TOPO sur le couloir. Usage : python3 -I rerb/exploration/controle_bdtopo.py couloir.json bat_ign.json [sortie_resultats.json]
+"""Contrôle du croisement OSM / BD TOPO sur le couloir. Usage : python3 -I outils/decor/controle_bdtopo.py couloir.json bat_ign.json [sortie_resultats.json]
 1) bâtiments OSM déjà cotés (height, étages) : écart OSM - IGN (médiane, 90e centile des écarts absolus, biais) ;
 2) bâtiments 'defaut' : part récupérée, part refusée par raison ; valeurs écartées."""
 import json
@@ -8,7 +8,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "rerb"))
 from bdtopo import croiser, dedoublonner  # noqa: E402
 from decor import convertir  # noqa: E402
 

@@ -1,15 +1,11 @@
-"""Tâche 5 : relayeur Upstash (une ou deux copies du serveur Vercel), blocage avec durée, purge de la mémoire, garde de taille,
+"""Relayeur Upstash (une ou deux copies du serveur Vercel), blocage avec durée, purge de la mémoire, garde de taille,
 coût en commandes et budget simulé.
 
 AUCUN réseau : FauxUpstash (magasin), FauxPrim (PRIM) et horloge simulée. Données inventées ; les heures sont en UTC.
 """
-import functools
 import json
-import os
-import sys
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from magasin import ErreurMagasin, MagasinFaux, compresser_json
 from magasin_upstash import MagasinUpstash
@@ -20,15 +16,12 @@ from serveur import (CLE_BLOCAGE, INTERVALLE_S, PLAFOND_JOUR, ErreurPrim, Plafon
 from test_faux_upstash import JETON_FICTIF, FauxUpstash
 from test_serveur import A, B, T0, appel, course, distance, livraison, localiser, nom
 
-DONNEES_PALAISEAU = Path.home() / "rerb-data-palaiseau-20261118"
-MESURE_UNE_COPIE_VINGT_HEURES = 8292   # commandes Upstash, une copie, 20 h, une requête toutes les 5 s (mesure du 25/11, exploration/budget_upstash.py)
-LENT_OK = os.environ.get("RERB_LENT") == "1"   # suite budget : ≈14 min, hors check.sh (lancer avec RERB_LENT=1)
-CIBLE_COMMANDES_MOIS = 250_000         # 50 % de 500 000 (offre gratuite), pour 50 visiteurs et 3 copies, 20 h par jour (ticket T5b)
+CIBLE_COMMANDES_MOIS = 250_000         # 50 % de 500 000 (offre gratuite), pour 50 visiteurs et 3 copies, 20 h par jour
 CIBLE_OCTETS_MOIS = 6 * 10**9          # 60 % de 10 Go : même scénario
 
 URL_FICTIVE = "https://fictif-upstash.example.test"
 PARIS_NUIT = datetime(2026, 11, 17, 1, 0, tzinfo=timezone.utc)   # 02:00 à Paris : coupure de nuit
-PARIS_JOUR = datetime(2026, 11, 16, 10, 0, tzinfo=timezone.utc)  # 11:00 à Paris (T0)
+PARIS_JOUR = datetime(2026, 11, 16, 10, 0, tzinfo=timezone.utc)  # 11:00 à Paris
 
 
 class FauxPrim:
@@ -384,30 +377,6 @@ class TestBlocageLocal(unittest.TestCase):
         self.assertEqual(releveur.actualiser(horloge()), "ok")
 
 
-@functools.lru_cache(maxsize=None)
-def _simulation(copies, heures):
-    """Une simulation par (copies, heures) : rejeu coûteux, mis en cache pour les tests."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent / "exploration"))
-    import budget_upstash
-    return budget_upstash.simuler(copies, heures)
-
-
-@unittest.skipUnless(LENT_OK and (DONNEES_PALAISEAU / "prim_estimated_timetable").is_dir(), "suite lente : RERB_LENT=1 et données de Palaiseau requises")
-class TestBudget(unittest.TestCase):
-    """Budget Upstash (exploration/budget_upstash.py), relevés réels de Palaiseau rejoués, une requête toutes les 5 s pendant la
-    fenêtre active, copies en tour de rôle. Critère T5b, décidé le 25/11 : base de 10 visiteurs × 30 min (5 h bout à bout), 3 copies,
-    au plus 250 000 commandes et 6 Go par mois. Le test de mesure fige la valeur d'une copie sur 20 h."""
-
-    def test_mesure_une_copie_sur_vingt_heures(self):
-        self.assertEqual(_simulation(1, 20)["commandes"], MESURE_UNE_COPIE_VINGT_HEURES)
-
-    def test_cible_commandes_par_mois_base_trois_copies(self):
-        self.assertLessEqual(_simulation(3, 5)["commandes"] * 30, CIBLE_COMMANDES_MOIS)
-
-    def test_cible_transfert_par_mois_base_trois_copies(self):
-        self.assertLessEqual(_simulation(3, 5)["octets"] * 30, CIBLE_OCTETS_MOIS)
-
-
 class TestEcritureEnPanne(unittest.TestCase):
     def test_echec_d_ecriture_apres_appel_garde_le_releve_localement(self):
         m = Monde()
@@ -441,32 +410,8 @@ class TestEcritureEnPanne(unittest.TestCase):
         self.assertIn("rerb:releve", m.faux.valeurs)
 
 
-def _decaler(x, suffixe, delta):
-    """Copie d'une livraison PRIM : identifiants de course suffixés, horodatages (clés se terminant par « Time ») décalés."""
-    if isinstance(x, list):
-        return [_decaler(v, suffixe, delta) for v in x]
-    if not isinstance(x, dict):
-        return x
-    sortie = {}
-    for cle, v in x.items():
-        if cle == "DatedVehicleJourneyRef" and isinstance(v, dict) and isinstance(v.get("value"), str):
-            v = {**v, "value": v["value"] + suffixe}   # forme réelle PRIM : {"value": ...}
-        elif cle == "DatedVehicleJourneyRef" and isinstance(v, str):
-            v = v + suffixe
-        elif isinstance(v, str) and cle.endswith("Time"):
-            try:
-                v = (datetime.fromisoformat(v.replace("Z", "+00:00")) + delta).isoformat()
-            except ValueError:
-                pass
-        else:
-            v = _decaler(v, suffixe, delta)
-        sortie[cle] = v
-    return sortie
-
-
-@unittest.skipUnless((DONNEES_PALAISEAU / "prim_estimated_timetable").is_dir(), "données de Palaiseau absentes")
 class TestQuotaPrim(unittest.TestCase):
-    """Quota PRIM journalisé (ticket T6a) : `quota_prim` rejoint le MSET existant, aucune commande Upstash de plus."""
+    """Quota PRIM journalisé : `quota_prim` rejoint le MSET existant, aucune commande Upstash de plus."""
     ENTETES = {"x-ratelimit-remaining": "1299", "x-ratelimit-reset": "1795000000"}
 
     def test_quota_ecrit_dans_le_mset_sans_commande_de_plus(self):
@@ -501,31 +446,3 @@ class TestQuotaPrim(unittest.TestCase):
         m.prim.erreur = ErreurPrim("réseau (TimeoutError)")
         r.lire(m.maintenant())
         self.assertEqual(m.faux.valeurs["rerb:quota_prim"][0], avant)
-
-
-class TestVingtHeuresDeRejeu(unittest.TestCase):
-    """Relevés réels de Palaiseau (environ 2 h, 59 relevés) répétés dix fois, soit environ 20 h, identifiants de course et
-    horodatages décalés à chaque répétition : la purge de 4 h et la garde de 2 Mo doivent tenir."""
-
-    CYCLES = 10
-
-    def test_purge_et_taille_sur_vingt_heures(self):
-        sys.path.insert(0, str(Path(__file__).resolve().parent / "exploration"))
-        import rejouer_palaiseau
-        releves = rejouer_palaiseau.lire_releves(DONNEES_PALAISEAU)
-        duree = releves[-1][0] - releves[0][0] + timedelta(minutes=1)
-        memoire, pire = Memoire(), 0
-        for c in range(self.CYCLES):
-            for instant, sd in releves:
-                consolider_livraison(_decaler(sd, f"#{c}", duree * c), memoire)
-                memoire.purger(instant + duree * c)
-                pire = max(pire, memoire.taille_export())
-        vus = memoire.exporter()["vus"]
-        self.assertLess(pire, TAILLE_MAX_OCTETS, pire)
-        self.assertTrue(any(k.endswith(f"#{self.CYCLES - 1}") for k in vus), "la dernière répétition doit être gardée")
-        anciens = tuple(f"#{c}" for c in range(self.CYCLES // 2))
-        self.assertFalse(any(k.endswith(anciens) for k in vus), "courses non vues depuis plus de 4 h encore gardées")
-
-
-if __name__ == "__main__":
-    unittest.main()

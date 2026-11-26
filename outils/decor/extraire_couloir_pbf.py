@@ -1,6 +1,6 @@
 """Extrait d'un fichier OSM PBF (Geofabrik, hors dépôt) les objets du couloir autour du tracé du RER B.
 Sortie : ~/rerb-osm/brut/ligne/couloir.json au format Overpass `out geom` (lu ensuite par decor.convertir).
-À lancer avec l'interpréteur qui a pyosmium : ~/rerb-osm/.venv/bin/python rerb/exploration/extraire_couloir_pbf.py [pbf] [rayon_m]
+À lancer avec l'interpréteur qui a pyosmium : ~/rerb-osm/.venv/bin/python outils/decor/extraire_couloir_pbf.py [pbf] [rayon_m]
 Règles : lignes (rues, voies ferrées, cours d'eau) = ways ; surfaces (bâtiments, parcs, eau, quais) = zones assemblées par
 osmium (relations multipolygones comprises), contour extérieur seulement. Un objet est gardé si un sommet est dans le couloir."""
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import osmium
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "rerb"))
 from decor_ligne import Couloir, echantillonner  # noqa: E402
 from serveur import charger_geo  # noqa: E402
 

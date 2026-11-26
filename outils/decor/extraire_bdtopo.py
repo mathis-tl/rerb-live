@@ -1,5 +1,5 @@
 """BD TOPO (GeoPackage, couche batiment, « En service ») -> bâtiments proches du décor OSM, en Lambert 93, JSON compact.
-Usage : python3 -I rerb/exploration/extraire_bdtopo.py couloir.json sortie.json D075.gpkg D077.gpkg ...
+Usage : python3 -I outils/decor/extraire_bdtopo.py couloir.json sortie.json D075.gpkg D077.gpkg ...
 Entrées externes non fiables : lecture seule (sqlite3 mode=ro), jamais d'exécution depuis le dossier de données, python -I.
 Ne garde que les bâtiments dont la boîte touche une case de 50 m occupée par un bâtiment OSM du décor (marge 50 m)."""
 import json
@@ -8,7 +8,7 @@ import struct
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "rerb"))
 from bdtopo import lambert93, decoder_geometrie, CASE_M  # noqa: E402
 from decor import convertir  # noqa: E402
 
