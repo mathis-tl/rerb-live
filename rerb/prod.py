@@ -19,10 +19,10 @@ from serveur import (CLE_BLOCAGE, CSV_GARES, DELAI_PRIM_S, EN_TETES, FENETRE_NUI
                      URL_PRIM_ET, URL_PRIM_SM_GARE, ErreurPrim, Plafond, _charger, appeler_prim, appeler_prim_avec_quota,
                      calculer_trains, construire_contexte, corps_trains, duree_blocage, est_nuit, ref_gare)
 
-CACHE_TRAINS = "public, s-maxage=5, stale-while-revalidate=10"   # décision T5 : CDN 5 s, requête locale 20 s (relayeur)
+CACHE_TRAINS = "public, s-maxage=5, stale-while-revalidate=10"   # CDN 5 s, requête locale 20 s (relayeur)
 CACHE_GARE = "public, s-maxage=60"                               # une gare : une réponse PRIM au plus par minute et par gare
 CACHE_SANS_CACHE = "no-store"
-STATUTS_ECRITS_PARTAGES = (401, 403)   # /gare écrit le blocage partagé pour ces statuts seulement (ticket T5b)
+STATUTS_ECRITS_PARTAGES = (401, 403)   # /gare écrit le blocage partagé pour ces statuts seulement
 NOMS_URL = ("UPSTASH_REDIS_REST_URL", "KV_REST_API_URL")
 NOMS_JETON = ("UPSTASH_REDIS_REST_TOKEN", "KV_REST_API_TOKEN")
 
@@ -54,7 +54,7 @@ class Services:
     def __init__(self, env, http=None, appeler=None, horloge=None):
         self.horloge = horloge or (lambda: datetime.now(timezone.utc))
         self._appeler = appeler or appeler_prim
-        self._quota_dernier = None   # en-têtes de quota du dernier appel PRIM de /trains (diagnostic T6a)
+        self._quota_dernier = None   # en-têtes de quota du dernier appel PRIM de /trains
         url, jeton = _premier(env, NOMS_URL), _premier(env, NOMS_JETON)
         self.magasin = MagasinUpstash(url, jeton, http=http) if url and jeton else None
         self.cle = env.get("PRIM_API_KEY") or None
@@ -77,9 +77,9 @@ class Services:
         return self._appel_prim_avec_quota(self.cle, URL_PRIM_ET, DELAI_PRIM_S)
 
     def _appel_prim_avec_quota(self, cle, url, delai):
-        """Appel PRIM réel : retient les en-têtes de quota (ticket T6a). Un `appeler` injecté (tests, banc) ne renvoie que la
+        """Appel PRIM réel : retient les en-têtes de quota. Un `appeler` injecté (tests, banc) ne renvoie que la
         livraison : aucun quota n'est retenu, et la réponse /trains ne change pas dans les deux cas.
-        # INVARIANT : la réponse /trains reste identique octet pour octet (T6a) ; seul le relayeur lit `_quota_dernier`."""
+        # INVARIANT : la réponse /trains reste identique octet pour octet ; seul le relayeur lit `_quota_dernier`."""
         if self._appeler is appeler_prim:
             livraison, self._quota_dernier = appeler_prim_avec_quota(cle, url, delai)
             return livraison
@@ -107,7 +107,7 @@ def reponse_trains(svc):
 
 def reponse_gare(svc, ref):
     """`ref` doit être une gare de la liste blanche (`ref_gare`). Ordre : nuit, clé, appel. Aucune lecture ni écriture
-    Upstash sauf l'écriture du blocage 401/403 (ecrire_blocage) : /gare ne dépend pas du stockage (décision T5b)."""
+    Upstash sauf l'écriture du blocage 401/403 (ecrire_blocage) : /gare ne dépend pas du stockage."""
     maintenant = svc.horloge()
 
     def corps(statut, passages=(), age_s=None, erreur=None, bloque=False):
@@ -122,10 +122,10 @@ def reponse_gare(svc, ref):
     return corps(resultat["statut"], resultat["passages"], resultat["age_s"], resultat["erreur"], svc.releveur_gares.bloque)
 
 
-def envoyer(requete, code, corps, cache):
+def envoyer(requete, code, corps, cache, supplementaires=None):
     """Réponse JSON : en-têtes de sécurité communs (EN_TETES), Cache-Control propre à la route, un seul en-tête par nom."""
     octets = json.dumps(corps, ensure_ascii=False).encode("utf-8")
-    entetes = {**EN_TETES, "Cache-Control": cache, "Content-Type": "application/json; charset=utf-8", "Content-Length": str(len(octets))}
+    entetes = {**EN_TETES, **(supplementaires or {}), "Cache-Control": cache, "Content-Type": "application/json; charset=utf-8", "Content-Length": str(len(octets))}
     requete.send_response(code)
     for nom, valeur in entetes.items():
         requete.send_header(nom, valeur)
@@ -133,5 +133,10 @@ def envoyer(requete, code, corps, cache):
     requete.wfile.write(octets)
 
 
-__all__ = ["CACHE_GARE", "CACHE_SANS_CACHE", "CACHE_TRAINS", "Services", "ecrire_blocage", "envoyer", "ref_gare",
+def methode_refusee(requete):
+    """Seul GET est servi : toute autre méthode reçoit un 405 JSON (et non la page d'erreur HTML par défaut)."""
+    envoyer(requete, 405, {"erreur": "méthode non autorisée"}, CACHE_SANS_CACHE, {"Allow": "GET"})
+
+
+__all__ = ["CACHE_GARE", "CACHE_SANS_CACHE", "CACHE_TRAINS", "Services", "ecrire_blocage", "envoyer", "methode_refusee", "ref_gare",
            "reponse_gare", "reponse_trains"]

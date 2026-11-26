@@ -1,4 +1,4 @@
-"""Fonction Vercel `/gare?ref=<numéro>` (T5) : routage HTTP seulement ; la logique est dans rerb/prod.py."""
+"""Fonction Vercel `/gare?ref=<numéro>` : routage HTTP seulement ; la logique est dans rerb/prod.py."""
 import os
 import sys
 from http.server import BaseHTTPRequestHandler
@@ -19,6 +19,11 @@ def services():
 
 
 class handler(BaseHTTPRequestHandler):
+    def _refuser(self):
+        prod.methode_refusee(self)
+
+    do_HEAD = do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _refuser
+
     def do_GET(self):
         svc = services()
         ref = prod.ref_gare(self.path, svc.gares)

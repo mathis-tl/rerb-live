@@ -1,4 +1,4 @@
-"""Fonctions Vercel (T5) : `api/trains.py` et `api/gare.py` (+ `api/sante.py`), configuration par l'environnement, secrets, en-têtes de cache.
+"""Fonctions Vercel : `api/trains.py` et `api/gare.py` (+ `api/sante.py`), configuration par l'environnement, secrets, en-têtes de cache.
 
 AUCUN réseau : faux Upstash (FauxUpstash), appel PRIM injecté (`appeler`), horloge simulée. Données inventées ; URL et jetons fictifs.
 """
@@ -264,7 +264,7 @@ class TestGare(unittest.TestCase):
         self.assertEqual(self.banc.faux.commandes, [])
 
     def test_blocage_ecrit_par_trains_ignore_par_gare(self):
-        """/gare ne lit plus Upstash : un blocage posé par /trains n'arrête pas /gare (décision de Mathis, 25/11)."""
+        """/gare ne lit plus Upstash : un blocage posé par /trains n'arrête pas /gare (décision du 25/11)."""
         self.banc.faux.valeurs["rerb:blocage"] = (json.dumps({"statut": 429}), None)
         _, _, corps = self.local.get(f"/?ref={REF}")
         self.assertEqual(corps["statut"], "ok")
@@ -322,6 +322,23 @@ class TestGare(unittest.TestCase):
                 _, _, corps = local.get(f"/?ref={REF}")
                 self.assertEqual(corps["statut"], "ok")
                 self.assertEqual(len(banc.appels), 2)
+
+
+class TestMethodes(unittest.TestCase):
+    """Seul GET est servi ; HEAD, POST, PUT, DELETE, PATCH et OPTIONS reçoivent un 405 JSON avec `Allow: GET`."""
+
+    def test_methodes_autres_que_get_refusees(self):
+        for nom in ("trains", "gare", "sante"):
+            local = Local(charger_api(nom).handler)
+            self.addCleanup(local.fermer)
+            for methode in ("POST", "PUT", "DELETE", "PATCH", "OPTIONS"):
+                requete = urllib.request.Request(f"http://127.0.0.1:{local.serveur.server_address[1]}/", method=methode, data=b"x" if methode != "OPTIONS" else None)
+                ouvreur = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                with self.assertRaises(urllib.error.HTTPError) as c:
+                    ouvreur.open(requete, timeout=5)
+                self.assertEqual(c.exception.code, 405, f"{nom} {methode}")
+                self.assertEqual(c.exception.headers["Allow"], "GET")
+                self.assertEqual(json.loads(c.exception.read()), {"erreur": "méthode non autorisée"})
 
 
 class TestSante(unittest.TestCase):
